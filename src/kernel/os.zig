@@ -113,16 +113,13 @@ fn kmain() !noreturn {
 
     scheduler.init();
 
-    // initially had the buffers here, moving them stack->heap didn't seem to change anything
     var on_process: Process = .create(on.func, null, &on.stack);
     var off_process: Process = .create(off.func, null, &off.stack);
 
-    // somehow LED never goes back off ^_^
     rp2040.led.on();
     scheduler.enqueue(&on_process);
-    rp2040.led.off();
-
     scheduler.enqueue(&off_process);
+    rp2040.led.off();
 
     scheduler.run();
 
@@ -140,7 +137,7 @@ fn delay(ticks: usize) void {
 const cc = scheduler.cc;
 
 const on = struct {
-    var stack: [256]u8 = undefined;
+    var stack: [256]u8  = undefined;
 
     fn func(_: Process.Args) callconv(cc) Process.ExitCode {
         while (true) {

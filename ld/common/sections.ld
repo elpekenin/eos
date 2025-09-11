@@ -1,3 +1,5 @@
+ASSERT((KERNEL_STACK_SIZE % 8) == 0, "Stack size must be a multiple of 8")
+
 SECTIONS
 {
 	.text : {
@@ -32,6 +34,7 @@ SECTIONS
 	} >ram
 
 	.stack (NOLOAD): {
+		. = ALIGN(8);
 		PROVIDE(__kernel_stack_start = .);
 		. += KERNEL_STACK_SIZE;
 		PROVIDE(__kernel_stack_end = .);
@@ -40,6 +43,7 @@ SECTIONS
 	.heap (NOLOAD) : {
 		PROVIDE(__kernel_heap_start = .);
 		. += ORIGIN(ram) + LENGTH(ram) - __kernel_heap_start;
+		. = ALIGN(8);
 		PROVIDE(__kernel_heap_end = .);
 	} >ram
 
