@@ -17,6 +17,5 @@
         "tools",
         "build.zig",
         "build.zig.zon",
-        "targets.zig",
     },
 }
