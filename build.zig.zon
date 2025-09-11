@@ -1,0 +1,22 @@
+.{
+    .name = .eos,
+    .version = "0.0.0",
+    .fingerprint = 0x9a3487378cf57645,
+    .minimum_zig_version = "0.15.1",
+
+    .dependencies = .{
+        .zlint = .{
+            .path = "../zlint",
+            .lazy = true,
+        },
+    },
+
+    .paths = .{
+        "ld",
+        "src",
+        "tools",
+        "build.zig",
+        "build.zig.zon",
+        "targets.zig",
+    },
+}

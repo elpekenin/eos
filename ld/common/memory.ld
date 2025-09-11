@@ -1,0 +1,5 @@
+MEMORY
+{
+	flash (rx!w) : ORIGIN = FLASH_START, LENGTH = FLASH_SIZE
+	ram (w!rx)   : ORIGIN = RAM_START,   LENGTH = RAM_SIZE
+}
