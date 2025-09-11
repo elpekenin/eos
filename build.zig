@@ -2,47 +2,38 @@ const std = @import("std");
 const targets = @import("src/targets.zig");
 
 pub fn build(b: *std.Build) void {
-    const maybe_soc = b.option(
-        targets.Soc,
-        "soc",
-        "target soc",
-    );
-
     const optimize = b.option(
         std.builtin.OptimizeMode,
         "optimize",
         "optimize mode",
     ) orelse .ReleaseSafe;
 
-    const targets_mod = b.createModule(.{
-        .root_source_file = b.path("src/targets.zig"),
-    });
+    for (std.enums.values(targets.Soc)) |soc| {
+        const soc_step = b.step(
+            @tagName(soc),
+            b.fmt("compile for {t}", .{soc}),
+        );
+        soc_step.dependOn(&compileKernel(b, soc, optimize).step);
 
-    const compile_all = b.step("compile-all", "try and compile for every target");
-    compile_all.dependOn(&compileAll(b, targets_mod).step);
+        b.getInstallStep().dependOn(soc_step);
+    }
 
-    const fmt = b.step("fmt", "run code formatter");
-    fmt.dependOn(&b.addFmt(.{
+    const fmt_step = b.step("fmt", "run code formatter");
+    const fmt_run = b.addFmt(.{
         .paths = &.{
             "build.zig",
             "build.zig.zon",
             "src/",
         },
-    }).step);
+    });
+    fmt_step.dependOn(&fmt_run.step);
 
-    const lint = b.step("lint", "run code linter");
-    runLint(lint); // TODO: zlint needs fix for 0.15
-
-    // selected a SoC -> compile kernel and quit
-    if (maybe_soc) |soc| {
-        compileKernel(b, soc, optimize);
-    } else {
-        b.getInstallStep().dependOn(&b.addSystemCommand(&.{ "echo", "missing SoC, can't compile" }).step);
-    }
+    const lint_step = b.step("lint", "run code linter");
+    runLint(lint_step); // TODO: zlint needs fix for 0.15
 }
 
 /// compiles the kernel for the given target and optimization level
-fn compileKernel(b: *std.Build, soc: targets.Soc, optimize: std.builtin.OptimizeMode) void {
+fn compileKernel(b: *std.Build, soc: targets.Soc, optimize: std.builtin.OptimizeMode) *std.Build.Step.Compile {
     const info = targets.database.getAssertContains(soc);
 
     const exe = b.addExecutable(.{
@@ -69,28 +60,7 @@ fn compileKernel(b: *std.Build, soc: targets.Soc, optimize: std.builtin.Optimize
         });
     }
 
-    b.installArtifact(exe);
-}
-
-/// configure a build step that will (try) compile every supported target
-/// and report whether the build failed
-fn compileAll(b: *std.Build, targets_mod: *std.Build.Module) *std.Build.Step.Run {
-    const mod = b.createModule(.{
-        .root_source_file = b.path("src/compile_all.zig"),
-        .target = b.resolveTargetQuery(.{}), // native
-    });
-    mod.addImport("targets", targets_mod);
-
-    const options = b.addOptions();
-    mod.addImport("options", options.createModule());
-
-    const exe = b.addExecutable(.{
-        .name = "compile-all",
-        .root_module = mod,
-    });
-    b.installArtifact(exe);
-
-    return b.addRunArtifact(exe);
+    return exe;
 }
 
 fn runLint(step: *std.Build.Step) void {

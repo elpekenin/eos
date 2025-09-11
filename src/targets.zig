@@ -6,7 +6,7 @@ const arm = std.Target.arm;
 pub const Soc = enum {
     rp2040,
     /// doesn't compile
-    /// 
+    ///
     /// added as a way to design for multiple targets
     stm32h7s78,
 };
