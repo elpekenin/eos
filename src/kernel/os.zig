@@ -12,6 +12,8 @@ else
     @compileError("TODO: Make things more flexible");
 
 export fn _start() callconv(.c) noreturn {
+    rp2040.init();
+
     const data_start = linker.data_start;
     const data_end = linker.data_end;
 
@@ -23,10 +25,6 @@ export fn _start() callconv(.c) noreturn {
 
     const bss: []u8 = bss_start[0 .. bss_end - bss_start];
     @memset(bss, 0);
-
-    rp2040.init();
-    rp2040.led.on();
-    delay(500_000);
 
     rp2040.led.off();
     delay(500_000);
@@ -56,13 +54,14 @@ export fn _start() callconv(.c) noreturn {
     @panic("somehow got out of kmain() with no error");
 }
 
-export var foo:  u32 = 0xDEAD_BEEF;
+export var foo: u32 = 0xDEAD_BEEF;
 
 fn kmain() !noreturn {
     std.log.info("reached kmain", .{});
+    rp2040.led.on();
 
     if (foo == 0xDEAD_BEEF) {
-        rp2040.led.on();
+        rp2040.led.off();
     }
 
     // kmem.init();
@@ -134,7 +133,7 @@ const VectorTable = extern struct {
     systick: ISR = unhandedInterrupt("systick"),
 };
 
-export const vector_table: VectorTable linksection(".vector_table") = .{
+export const vector_table: VectorTable linksection(".startup") = .{
     .sp = linker.stack_end,
     .reset = _start,
 };
@@ -148,7 +147,7 @@ fn delay(ticks: usize) void {
 const cc = scheduler.cc;
 
 const on = struct {
-    var stack: [256]u8  = undefined;
+    var stack: [256]u8 = undefined;
 
     fn func(_: Process.Args) callconv(cc) Process.ExitCode {
         while (true) {

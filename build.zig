@@ -13,13 +13,20 @@ pub fn build(b: *std.Build) void {
     // they are also added as dependencies of install step
     // this way, `zig build` builds everything
     for (std.enums.values(targets.Soc)) |soc| {
+        const kernel = compileKernel(b, soc, optimize);
+        const install_kernel = if (soc == .rp2040) step: {
+            setupStage2(b, kernel);
+            const uf2 = toUf2(kernel, soc, .{});
+            break :step &b.addInstallFile(uf2, b.fmt("kernel_{t}.uf2", .{soc})).step;
+        } else
+            &b.addInstallArtifact(kernel, .{}).step;
+
         const soc_step = b.step(
             @tagName(soc),
             b.fmt("compile for {t}", .{soc}),
         );
-        soc_step.dependOn(compileKernel(b, soc, optimize));
-
-        b.getInstallStep().dependOn(soc_step);
+        soc_step.dependOn(install_kernel);
+        b.getInstallStep().dependOn(soc_step); // no step provided -> implicit install -> build every soc
     }
 
     const fmt = b.step("fmt", "run code formatter");
@@ -31,16 +38,13 @@ pub fn build(b: *std.Build) void {
         },
     });
     fmt.dependOn(&run_fmt.step);
-
-    const lint_step = b.step("lint", "run code linter");
-    runLint(lint_step); // TODO: zlint needs fix for 0.15
 }
 
 /// compiles the kernel for the given target and optimization level
-fn compileKernel(b: *std.Build, soc: targets.Soc, optimize: std.builtin.OptimizeMode) *std.Build.Step {
+fn compileKernel(b: *std.Build, soc: targets.Soc, optimize: std.builtin.OptimizeMode) *std.Build.Step.Compile {
     const info = targets.database.getAssertContains(soc);
 
-    const exe = b.addExecutable(.{
+    const kernel = b.addExecutable(.{
         .name = b.fmt("kernel_{t}.elf", .{soc}),
         .root_module = b.createModule(.{
             .target = b.resolveTargetQuery(info.query()),
@@ -51,32 +55,12 @@ fn compileKernel(b: *std.Build, soc: targets.Soc, optimize: std.builtin.Optimize
 
     const options = b.addOptions();
     options.addOption(targets.Soc, "soc", soc);
-    exe.root_module.addImport("options", options.createModule());
+    kernel.root_module.addImport("options", options.createModule());
 
     const script = info.linker_script orelse b.fmt("ld/{s}.ld", .{@tagName(soc)});
-    exe.setLinkerScript(b.path(script));
+    kernel.setLinkerScript(b.path(script));
 
-    const kernel = b.addInstallArtifact(exe, .{});
-
-    if (soc == .rp2040) {
-        setupStage2(b, exe);
-        return toUf2(exe, soc, .{});
-    }
-
-    return &kernel.step;
-}
-
-fn runLint(step: *std.Build.Step) void {
-    const b = step.owner;
-    if (false) {
-        const zlint = b.dependency("zlint", .{}).artifact("zlint");
-
-        const lint = b.addRunArtifact(zlint);
-        lint.addArg("--verbose");
-        lint.addDirectoryArg(b.path(""));
-
-        step.dependOn(&lint.step);
-    }
+    return kernel;
 }
 
 /// NOTE: this logic and the code being compiled where copied from MicroZig
@@ -115,8 +99,8 @@ const Uf2Options = struct {
 
 // TODO: migrate to zig?
 /// given a binary file, create the equivalent UF2 for it
-fn toUf2(exe: *std.Build.Step.Compile, soc: targets.Soc, options: Uf2Options) *std.Build.Step {
-    const b = exe.step.owner;
+fn toUf2(kernel: *std.Build.Step.Compile, soc: targets.Soc, options: Uf2Options) std.Build.LazyPath {
+    const b = kernel.step.owner;
 
     const family: []const u8 = switch (soc) {
         .rp2040 => "RP2040",
@@ -139,14 +123,12 @@ fn toUf2(exe: *std.Build.Step.Compile, soc: targets.Soc, options: Uf2Options) *s
 
     cmd.addArg("--convert");
     // NOTE: uf2conv does not support elf, and using bin does not (correctly?) infer base address
-    const hex = b.addObjCopy(exe.getEmittedBin(), .{
+    const hex = b.addObjCopy(kernel.getEmittedBin(), .{
         .basename = "kernel.hex",
         .format = .hex,
     });
     cmd.addFileArg(hex.getOutput());
 
     cmd.addArg("--output");
-    const uf2 = cmd.addOutputFileArg("kernel.uf2");
-
-    return &b.addInstallFile(uf2, b.fmt("kernel_{t}.uf2", .{soc})).step;
+    return cmd.addOutputFileArg("kernel.uf2");
 }

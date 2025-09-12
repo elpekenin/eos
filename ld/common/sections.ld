@@ -3,26 +3,26 @@ SECTIONS
     /**
      * FLASH
      */
-    . = ORIGIN(flash);
-
-    PROVIDE(__kernel_flash_start = .);
-
     .text : {
-        KEEP(*(.vector_table))
+        PROVIDE(__kernel_flash_start = .);
+
+        /* vector table and whatnot */
+        KEEP(*(.startup))
+
         *(.text*)
         *(.rodata*)
     } > flash
 
-    . = ALIGN(4);
-
-    /* remaining flash memory will store initialization values */
-    PROVIDE(__kernel_data_source = .);
+    /* if we dont discard these, they might mess up location of vector table */
+    /DISCARD/ : {
+        *(.ARM.exidx*)
+        *(.ARM.extab*)
+        *(.gnu.linkonce.armexidx.*)
+    } > flash
 
     /**
      * RAM
      */
-    . = ORIGIN(ram);
-
     .stack (NOLOAD) : {
         . = ALIGN(4k);
         PROVIDE(__kernel_stack_start = .);
@@ -43,7 +43,7 @@ SECTIONS
         PROVIDE(__kernel_bss_end = .);
     } > ram
 
-    .data : AT(__kernel_data_source) {
+    .data : {
         . = ALIGN(4);
         PROVIDE(__kernel_data_start = .);
 
@@ -58,7 +58,9 @@ SECTIONS
 
         . = ALIGN(4);
         PROVIDE(__kernel_data_end = .);
-    } > ram
+    } > ram AT> flash
+
+    PROVIDE(__kernel_data_source = LOADADDR(.data));
 
     /* Preserved across reset */
     .noinit (NOLOAD) : {

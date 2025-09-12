@@ -19,6 +19,10 @@ extern var __kernel_heap_end: anyopaque;
 // location of values stored in flash to be copied into RAM
 extern var __kernel_data_source: anyopaque;
 
+//
+//
+//
+
 pub const data_start: [*]u8 = @ptrCast(&__kernel_data_start);
 pub const data_end: [*]u8 = @ptrCast(&__kernel_data_end);
 

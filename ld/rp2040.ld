@@ -18,8 +18,7 @@ SECTIONS
     __boot2_end__ = .;
   } > flash
 
-  ASSERT(__boot2_end__ - __boot2_start__ == 256,
-    "ERROR: Pico second stage bootloader must be 256 bytes in size")
+  ASSERT(__boot2_end__ - __boot2_start__ == 0x100, "boot2 must be 256 bytes")
 }
 
 INCLUDE ld/common/sections.ld;
