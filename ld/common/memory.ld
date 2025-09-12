@@ -5,6 +5,6 @@
  */
 MEMORY
 {
-	flash (r!wx) : ORIGIN = FLASH_START, LENGTH = FLASH_SIZE
-	ram (rwx)    : ORIGIN = RAM_START,   LENGTH = RAM_SIZE
+    flash (r!wx) : ORIGIN = FLASH_START, LENGTH = FLASH_SIZE
+    ram (rwx)    : ORIGIN = RAM_START,   LENGTH = RAM_SIZE
 }

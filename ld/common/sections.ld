@@ -1,51 +1,77 @@
-ASSERT((KERNEL_STACK_SIZE % 8) == 0, "Stack size must be a multiple of 8")
-
 SECTIONS
 {
-	.text : {
-		KEEP(*(.vector_table))
-		*(.text*)
-		*(.rodata*)
-	} >flash
+    /**
+     * FLASH
+     */
+    . = ORIGIN(flash);
 
-	/* Debug info (unwinding?) */
-	/* .ARM.exidx */
-	/DISCARD/ : {
-		*(.ARM.exidx*)
-		*(.ARM.extab*)
-		*(.gnu.linkonce.armexidx.*)
-	} >flash
+    PROVIDE(__kernel_flash_start = .);
 
-	/* Preserved across reset */
-	.noinit (NOLOAD) : {
-		KEEP(*(.noinit*))
-	} >ram
+    .text : {
+        KEEP(*(.vector_table))
+        *(.text*)
+        *(.rodata*)
+    } > flash
 
-	.data : {
-		PROVIDE(__data_start = .);
-		*(.data.*)
-		PROVIDE(__data_end = .);
-	} >ram AT>flash
+    . = ALIGN(4);
 
-	.bss (NOLOAD) : {
-		PROVIDE(__bss_start = .);
-		*(.bss.*)
-		PROVIDE(__bss_end = .);
-	} >ram
+    /* remaining flash memory will store initialization values */
+    PROVIDE(__kernel_data_source = .);
 
-	.stack (NOLOAD): {
-		. = ALIGN(8);
-		PROVIDE(__kernel_stack_start = .);
-		. += KERNEL_STACK_SIZE;
-		PROVIDE(__kernel_stack_end = .);
-	} >ram
+    /**
+     * RAM
+     */
+    . = ORIGIN(ram);
 
-	.heap (NOLOAD) : {
-		PROVIDE(__kernel_heap_start = .);
-		. += ORIGIN(ram) + LENGTH(ram) - __kernel_heap_start;
-		. = ALIGN(8);
-		PROVIDE(__kernel_heap_end = .);
-	} >ram
+    .stack (NOLOAD) : {
+        . = ALIGN(4k);
+        PROVIDE(__kernel_stack_start = .);
 
-	PROVIDE(__data_source = LOADADDR(.data));
+        . += KERNEL_STACK_SIZE;
+
+        . = ALIGN(4);
+        PROVIDE(__kernel_stack_end = .);
+    } > ram
+
+    .bss (NOLOAD) : {
+        . = ALIGN(4);
+        PROVIDE(__kernel_bss_start = .);
+
+        *(.bss.*)
+
+        . = ALIGN(4);
+        PROVIDE(__kernel_bss_end = .);
+    } > ram
+
+    .data : AT(__kernel_data_source) {
+        . = ALIGN(4);
+        PROVIDE(__kernel_data_start = .);
+
+        . = ALIGN(4);
+        *(.ramtext*)
+
+        . = ALIGN(4);
+        *(.data.*)
+
+        . = ALIGN(4);
+        *(.sdata.*)
+
+        . = ALIGN(4);
+        PROVIDE(__kernel_data_end = .);
+    } > ram
+
+    /* Preserved across reset */
+    .noinit (NOLOAD) : {
+        KEEP(*(.noinit*))
+    } > ram
+
+    .heap (NOLOAD) : {
+        . = ALIGN(4);
+        PROVIDE(__kernel_heap_start = .);
+
+        . += ORIGIN(ram) + LENGTH(ram) - __kernel_heap_start;
+
+        . = ALIGN(4);
+        PROVIDE(__kernel_heap_end = .);
+    } > ram
 }

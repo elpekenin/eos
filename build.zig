@@ -60,7 +60,7 @@ fn compileKernel(b: *std.Build, soc: targets.Soc, optimize: std.builtin.Optimize
 
     if (soc == .rp2040) {
         setupStage2(b, exe);
-        kernel.step.dependOn(toUf2(exe, soc, .{}));
+        return toUf2(exe, soc, .{});
     }
 
     return &kernel.step;
@@ -85,7 +85,7 @@ fn runLint(step: *std.Build.Step) void {
 /// contains the binary for the compiled stage2 bootloader that sets up the
 /// XIP flash
 fn setupStage2(b: *std.Build, kernel: *std.Build.Step.Compile) void {
-    const exe = b.addExecutable(.{
+    const stage2 = b.addExecutable(.{
         .name = "stage2-w25q080",
         .root_module = b.createModule(.{
             .optimize = kernel.root_module.optimize,
@@ -93,19 +93,19 @@ fn setupStage2(b: *std.Build, kernel: *std.Build.Step.Compile) void {
         }),
     });
 
-    exe.linkage = .static;
-    exe.build_id = .none;
-    exe.setLinkerScript(b.path("src/bootrom/stage2.ld"));
-    exe.addAssemblyFile(b.path("src/bootrom/w25q080.S"));
-    exe.entry = .{ .symbol_name = "_stage2_boot" };
+    stage2.linkage = .static;
+    stage2.build_id = .none;
+    stage2.setLinkerScript(b.path("src/bootrom/stage2.ld"));
+    stage2.addAssemblyFile(b.path("src/bootrom/w25q080.S"));
+    stage2.entry = .{ .symbol_name = "_stage2_boot" };
 
-    const bin = b.addObjCopy(exe.getEmittedBin(), .{
+    const bin = b.addObjCopy(stage2.getEmittedBin(), .{
         .basename = "stage2-w25q080.bin",
         .format = .bin,
-    });
+    }).getOutput();
 
     kernel.root_module.addImport("bootloader", b.createModule(.{
-        .root_source_file = bin.getOutput(),
+        .root_source_file = bin,
     }));
 }
 
@@ -128,7 +128,6 @@ fn toUf2(exe: *std.Build.Step.Compile, soc: targets.Soc, options: Uf2Options) *s
         "tools/uf2/uf2conv.py",
         "--family",
         family,
-        "--convert",
     });
 
     if (options.base) |base| {
@@ -138,14 +137,13 @@ fn toUf2(exe: *std.Build.Step.Compile, soc: targets.Soc, options: Uf2Options) *s
         });
     }
 
-    // NOTE: uf2conv does not support elf
-    // using bin does not (correctly?) infer the base address
-    // as such: convert to hex
-    const bin = b.addObjCopy(exe.getEmittedBin(), .{
+    cmd.addArg("--convert");
+    // NOTE: uf2conv does not support elf, and using bin does not (correctly?) infer base address
+    const hex = b.addObjCopy(exe.getEmittedBin(), .{
         .basename = "kernel.hex",
         .format = .hex,
     });
-    cmd.addFileArg(bin.getOutput());
+    cmd.addFileArg(hex.getOutput());
 
     cmd.addArg("--output");
     const uf2 = cmd.addOutputFileArg("kernel.uf2");
