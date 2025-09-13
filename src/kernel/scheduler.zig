@@ -16,110 +16,132 @@ comptime {
     }
 }
 
+const clobbers: std.builtin.assembly.Clobbers = switch (cpu.arch) {
+    else => unreachable,
+    .thumb => .{
+        .r0 = true,
+        .r1 = true,
+        .r2 = true,
+        .r3 = true,
+        .r4 = true,
+        .r5 = true,
+        .r6 = true,
+        // .r7 = true, // reserved
+        .r8 = true,
+        .r9 = true,
+        .r10 = true,
+        .r11 = true,
+        .r12 = true,
+        .r13 = true,
+        .r14 = true,
+        // this goes up to r15...
+        // https://github.com/ARM-software/abi-aa/blob/main/aapcs32/aapcs32.rst#611core-registers
+    },
+};
+
 /// this is equivalent to = .c, AFAICT
 pub const cc: std.builtin.CallingConvention = switch (cpu.arch) {
-    .thumb => .{ .arm_aapcs = .{} },
     else => unreachable,
+    .thumb => .{ .arm_aapcs = .{} },
+};
+
+/// This data structure is used by the assembly code, do not change it
+const Context = extern struct {
+    sp: usize,
+    pc: usize,
+    fp: usize,
+};
+
+/// This data structure is used by the assembly code, do not change it
+const Swap = extern struct {
+    prev: *Context,
+    next: *Context,
 };
 
 var current_process: ?*Process = null;
-
-export var save_process: *Process = undefined;
-export var restore_process: *Process = undefined;
 
 var queue: Queue = .{};
 
 fn nextProcess() ?*Process {
     const node = queue.popFirst() orelse return null;
-    return .from(node);
+    return Process.fromNode(node);
 }
 
 const kernel = struct {
-    var stack: [256]u8 = undefined;
+    var stack: [128]u8 align(4) = undefined;
 
     var process: Process = .{
-        .pc = undefined,
-        .sp = undefined,
+        .context = undefined,
         .stack = &stack,
         .exit_code = null,
         .node = .{},
     };
 };
 
+fn getKernelProcess() *Process {
+    return &kernel.process;
+}
+
 pub const Process = struct {
     pub const Args = ?*anyopaque;
     pub const ExitCode = usize;
     pub const Entrypoint = *const fn (Args) callconv(cc) ExitCode;
 
-    pc: usize,
-    sp: usize,
-    stack: []u8,
+    context: Context,
     exit_code: ?ExitCode,
-
     node: Queue.Node,
+    stack: []u8,
 
     pub fn create(entrypoint: Entrypoint, args: Args, stack: []u8) Process {
+        const sp = @intFromPtr(stack.ptr) + stack.len;
+        assert(sp & 0b11 == 0); // 4-byte aligned
+
+        // TODO: insert entrypoint and args information
         var self: Process = .{
-            .pc = @intFromPtr(&asmTrampoline),
-            .sp = @intFromPtr(stack.ptr) + stack.len,
+            .context = .{
+                .sp = sp,
+                .fp = undefined,
+                .pc = @intFromPtr(&trampoline),
+            },
             .stack = stack,
             .exit_code = null,
             .node = .{},
         };
 
+        self.push(@intFromPtr(entrypoint));
+        self.push(@intFromPtr(args));
+
         switch (cpu.arch) {
-            .thumb => {
-                self.push(0); // ip (unused)
-                self.push(0); // fp (unused)
-                self.push(0); // r10 (unused)
-                self.push(0); // r9 (unused)
-                self.push(0); // r8 (unused)
-                self.push(@intFromPtr(entrypoint)); // r7
-                self.push(0); // r6 (unused)
-                self.push(0); // r5 (unused)
-                self.push(0); // r4 (unused)
-                self.push(0); // r3 (unused)
-                self.push(0); // r2 (unused)
-                self.push(0); // r1 (unused)
-                self.push(@intFromPtr(args)); // r0
-            },
             else => unreachable,
+            .thumb => {
+                // clobbers is r0-r14
+                for (0..15) |r| {
+                    if (r == 7) continue; // ... but r7 is reserved
+                    self.push(0); // unused value, just put a 0
+                }
+            },
         }
 
         return self;
     }
 
-    fn from(node: *Queue.Node) *Process {
+    fn fromNode(node: *Queue.Node) *Process {
         return @fieldParentPtr("node", node);
     }
 
-    const SpawnOptions = struct {
-        stack_size: usize = 1024,
-    };
-
-    // fn spawn(entrypoint: Entrypoint, args: Args, options: SpawnOptions) !Process {
-    //     const stack = try kmem.alloc(options.stack_size);
-    //     errdefer comptime unreachable;
-    //     return create(entrypoint, args, stack[0..options.stack_size]);
-    // }
-
-    fn finished(self: *const Process) bool {
-        return self.exitcode != null;
+    fn fromContext(context: *Context) *Process {
+        return @fieldParentPtr("context", context);
     }
 
     fn stackBase(self: *const Process) usize {
         return @intFromPtr(self.stack.ptr);
     }
 
-    fn stackEnd(self: *const Process) usize {
-        return self.stackBase() + self.stack.len;
-    }
-
     fn push(self: *Process, value: usize) void {
-        self.sp -= @sizeOf(usize);
-        std.debug.assert(self.sp >= self.stackBase());
+        self.context.sp -= @sizeOf(usize);
+        std.debug.assert(self.context.sp >= self.stackBase());
 
-        const ptr: *usize = @ptrFromInt(self.sp);
+        const ptr: *usize = @ptrFromInt(self.context.sp);
         ptr.* = value;
     }
 };
@@ -130,27 +152,76 @@ pub fn init() void {
 
 pub fn run() void {
     std.debug.assert(current_process == null);
-    current_process = &kernel.process;
 
-    const node = queue.popFirst() orelse {
+    const next = nextProcess() orelse {
         logger.warn("no processes in queue, nothing to do", .{});
         return;
     };
 
-    doSwitch(&kernel.process, .from(node));
+    // without this, assert on doSwitch would fail
+    current_process = getKernelProcess();
+
+    doSwitch(&.{
+        .prev = &getKernelProcess().context,
+        .next = &next.context,
+    });
 
     current_process = null; // cleanup
 }
 
-fn doSwitch(old: *Process, new: *Process) void {
-    assert(old == current_process);
+inline fn doSwitch(swap: *const Swap) void {
+    assert(Process.fromContext(swap.prev) == current_process);
+    current_process = Process.fromContext(swap.next);
 
-    save_process = old;
-    restore_process = new;
+    switch (cpu.arch) {
+        else => unreachable,
+        // FIXME: assumes word size == 4, does that always hold?
+        .thumb => asm volatile (
+            // `swap` is a ptr to a struct where
+            //   - first word is another ptr, to the prev context
+            //   - second word is another ptr, to the next context
+            \\ldr r1, [r0, #0]
+            \\ldr r2, [r0, #4]
+            \\
+            // NOTE: some registers can't be accessed directly, need to be copied first
+            // backup current state into prev
+            \\mov r3, sp
+            \\str r3, [r1, #0]
+            \\mov r3, lr
+            \\str r3, [r1, #4]
+            \\mov r3, fp
+            \\str r3, [r1, #8]
+            \\
+            // restore state from next
+            \\ldr r3, [r2, #0]
+            \\mov sp, r3
+            \\ldr r3, [r2, #4]
+            \\mov lr, r3
+            \\ldr r3, [r2, #8]
+            \\mov fp, r3
+            \\
+            // jump back
+            \\bx lr
+            :
+            : [input] "{r0}" (swap)
+            : clobbers
+        )
+    }
+}
 
-    current_process = new;
-
-    asmSwitch();
+fn trampoline() callconv(.c) void {
+    switch (cpu.arch) {
+        else => unreachable,
+        .thumb => asm volatile (
+            // Process.create pushes args and entrypoint (will pop into r0 and r1)
+            // it also pushes a dummy context (r0-r14) that will be ignored after doSwitch
+            \\pop {r0-r1}
+            \\blx r1
+            // when entrypoint returns, exitcode is on r0, which is already ready to be arg0 for exit
+            // we don't need to setup a link back before jumping, exit is noreturn
+            \\b exit
+        )
+    }
 }
 
 /// this function simply adds a node to the processes' queue
@@ -158,131 +229,31 @@ pub fn enqueue(process: *Process) void {
     queue.append(&process.node);
 }
 
-pub fn yield() void {
-    const old = current_process orelse @panic("kernel called yield()");
-    queue.append(&old.node);
+pub export fn yield() void {
+    const prev = current_process orelse @panic("kernel called yield()");
+    queue.append(&prev.node);
 
     // just added `old` to queue, we will surely get a new value out (at least, pop'ing it back)
-    const new = nextProcess() orelse unreachable;
+    const next = nextProcess() orelse unreachable;
 
-    doSwitch(old, new);
+    doSwitch(&.{
+        .prev = &prev.context,
+        .next = &next.context,
+    });
 }
 
 export fn exit(code: Process.ExitCode) callconv(cc) noreturn {
-    const old = current_process orelse @panic("kernel called exit()");
+    const prev = current_process orelse @panic("kernel called exit()");
 
-    queue.remove(&old.node);
-    old.exit_code = code;
+    queue.remove(&prev.node);
+    prev.exit_code = code;
 
-    const new = nextProcess() orelse &kernel.process;
+    const next = nextProcess() orelse getKernelProcess();
 
-    doSwitch(old, new);
-
-    @panic("unreachable after switching back from ending processs");
-}
-
-extern fn asmSwitch() callconv(cc) void;
-extern fn asmTrampoline() callconv(cc) void;
-
-comptime {
-    const offsets = std.fmt.comptimePrint(
-        \\.equ PC_OFFSET, {[pc_offset]}
-        \\.equ SP_OFFSET, {[sp_offset]}
-        \\
-    ,
-        .{
-            .pc_offset = @offsetOf(Process, "pc"),
-            .sp_offset = @offsetOf(Process, "sp"),
-        },
-    );
-    const assembly = (switch (cpu.arch) {
-        else => unreachable,
-        // armv6m-only (rp2040) for now
-        .thumb =>
-        // ---
-        // trampoline
-        // ---
-        \\
-        \\.thumb_func
-        \\.global asmTrampoline
-        \\asmTrampoline:
-        // restored stack after Process.create
-        // args was been pushed to r0 and entrypoint to r7
-        // they already got pop'ed (r0 -> arg0)
-        \\  blx r7
-        // entrypoint returns exitcode (in r0)
-        // we just need to jump into exit, as that's the register for arg0
-        // no need to link back when jumping, exit is noreturn
-        // however, `b exit` has limited range, must load address first
-        \\  ldr r1, .exit
-        \\  bx r1
-        \\
-        // required because of offset limits. if not aligned, loading them fails
-        \\.align 2
-        \\
-        \\.exit:
-        \\  .word exit
-        \\
-        // ---
-        // switch
-        // ---
-        \\
-        \\.thumb_func
-        \\.global asmSwitch
-        \\asmSwitch:
-        // push registers
-        // push's reglist only supports r0-r7, so we do it in 2 steps
-        \\  push {r0-r7}
-        \\  mov r0, r8
-        \\  mov r1, r9
-        \\  mov r2, r10
-        \\  mov r3, fp
-        \\  mov r4, ip
-        \\  push {r0-r4}
-        // load current process
-        \\  ldr r0, .save
-        \\  ldr r0, [r0]
-        // backup current state
-        // high registers (lr, sp) can' be used on str directy, need to be copied first
-        \\  mov r1, lr
-        \\  str r1, [r0, #PC_OFFSET]
-        \\  mov r1, sp
-        \\  str r1, [r0, #SP_OFFSET]
-        // ---
-        // load new process
-        \\  ldr r0, .restore
-        \\  ldr r0, [r0]  
-        // restore state
-        // same as above, must use intermediate register
-        \\  ldr r1, [r0, #PC_OFFSET]
-        \\  mov lr, r1
-        \\  ldr r1, [r0, #SP_OFFSET]
-        \\  mov sp, r1
-        // pop registers
-        // same as above, must be 2 steps
-        \\  pop {r0-r4}
-        \\  mov r8, r0
-        \\  mov r9, r1
-        \\  mov r10, r2
-        \\  mov fp, r3
-        \\  mov ip, r4
-        \\  pop {r0-r7}
-        // jump
-        \\ bx lr
-        \\
-        // ---
-        // aliases
-        // ---
-        \\
-        // required because of offset limits. if not aligned, loading them fails
-        \\.align 2
-        \\
-        \\.save:
-        \\  .word save_process
-        \\
-        \\.restore:
-        \\  .word restore_process
+    doSwitch(&.{
+        .prev = &prev.context,
+        .next = &next.context,
     });
 
-    asm (offsets ++ assembly);
+    @panic("unreachable after switching back from ending processs");
 }

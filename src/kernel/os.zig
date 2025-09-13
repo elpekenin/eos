@@ -14,20 +14,27 @@ else
 export fn _start() callconv(.c) noreturn {
     rp2040.init();
 
-    const data_start = linker.data_start;
-    const data_end = linker.data_end;
+    // fill bss with zeroes
+    const bss_start = @intFromPtr(&linker.__kernel_bss_start);
+    const bss_end = @intFromPtr(&linker.__kernel_bss_end);
 
-    const data: []u8 = data_start[0 .. data_end - data_start];
-    @memcpy(data, linker.data_source[0..data.len]);
+    const bss_size = bss_end - bss_start;
 
-    const bss_start = linker.bss_start;
-    const bss_end = linker.bss_end;
+    @memset(@as([*]volatile u32, @ptrFromInt(bss_start))[0 .. bss_size / 4], 0);
 
-    const bss: []u8 = bss_start[0 .. bss_end - bss_start];
-    @memset(bss, 0);
 
-    rp2040.led.off();
-    delay(500_000);
+    // copy data to ram
+    const data_source = @intFromPtr(&linker.__kernel_data_source);
+
+    const data_start = @intFromPtr(&linker.__kernel_data_start);
+    const data_end = @intFromPtr(&linker.__kernel_data_end);
+
+    const data_size = data_end - data_start;
+
+    @memcpy(
+        @as([*]volatile u32, @ptrFromInt(data_start))[0 .. data_size / 4],
+        @as([*]volatile u32, @ptrFromInt(data_source))[0 .. data_size / 4],
+    );
 
     kmain() catch |err| {
         std.log.err("kmain() returned error: '{t}'", .{err});
@@ -54,24 +61,19 @@ export fn _start() callconv(.c) noreturn {
     @panic("somehow got out of kmain() with no error");
 }
 
-export var foo: u32 = 0xDEAD_BEEF;
-
 fn kmain() !noreturn {
     std.log.info("reached kmain", .{});
-    rp2040.led.on();
-
-    if (foo == 0xDEAD_BEEF) {
-        rp2040.led.off();
-    }
 
     // kmem.init();
 
     scheduler.init();
 
-    var on_process: Process = .create(on.func, null, &on.stack);
-    var off_process: Process = .create(off.func, null, &off.stack);
-
+    var on_stack: [128]u8 align(4) = undefined;
+    var on_process: Process = .create(onProc, null, &on_stack);
     scheduler.enqueue(&on_process);
+
+    var off_stack: [128] u8 align(4) = undefined;
+    var off_process: Process = .create(offProc, null, &off_stack);
     scheduler.enqueue(&off_process);
 
     scheduler.run();
@@ -134,7 +136,7 @@ const VectorTable = extern struct {
 };
 
 export const vector_table: VectorTable linksection(".startup") = .{
-    .sp = linker.stack_end,
+    .sp = &linker.__kernel_stack_end,
     .reset = _start,
 };
 
@@ -146,30 +148,18 @@ fn delay(ticks: usize) void {
 
 const cc = scheduler.cc;
 
-const on = struct {
-    var stack: [256]u8 = undefined;
+fn onProc(_: Process.Args) callconv(cc) Process.ExitCode {
+    rp2040.led.on();
+    delay(500_000);
+    scheduler.yield();
 
-    fn func(_: Process.Args) callconv(cc) Process.ExitCode {
-        while (true) {
-            rp2040.led.on();
-            delay(500_000);
-            scheduler.yield();
-        }
+    return 0;
+}
 
-        return 0;
-    }
-};
+fn offProc(_: Process.Args) callconv(cc) Process.ExitCode {
+    rp2040.led.off();
+    delay(500_000);
+    scheduler.yield();
 
-const off = struct {
-    var stack: [256]u8 = undefined;
-
-    fn func(_: Process.Args) callconv(cc) Process.ExitCode {
-        while (true) {
-            rp2040.led.off();
-            delay(500_000);
-            scheduler.yield();
-        }
-
-        return 0;
-    }
-};
+    return 0;
+}

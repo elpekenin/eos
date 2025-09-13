@@ -37,7 +37,8 @@ SECTIONS
         . = ALIGN(4);
         PROVIDE(__kernel_bss_start = .);
 
-        *(.bss.*)
+        *(.bss*)
+        *(.sbss*)
 
         . = ALIGN(4);
         PROVIDE(__kernel_bss_end = .);
@@ -51,10 +52,10 @@ SECTIONS
         *(.ramtext*)
 
         . = ALIGN(4);
-        *(.data.*)
+        *(.data*)
 
         . = ALIGN(4);
-        *(.sdata.*)
+        *(.sdata*)
 
         . = ALIGN(4);
         PROVIDE(__kernel_data_end = .);
