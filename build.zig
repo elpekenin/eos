@@ -18,8 +18,7 @@ pub fn build(b: *std.Build) void {
             setupStage2(b, kernel);
             const uf2 = toUf2(kernel, soc, .{});
             break :step &b.addInstallFile(uf2, b.fmt("kernel_{t}.uf2", .{soc})).step;
-        } else
-            &b.addInstallArtifact(kernel, .{}).step;
+        } else &b.addInstallArtifact(kernel, .{}).step;
 
         const soc_step = b.step(
             @tagName(soc),

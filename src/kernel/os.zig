@@ -22,7 +22,6 @@ export fn _start() callconv(.c) noreturn {
 
     @memset(@as([*]volatile u32, @ptrFromInt(bss_start))[0 .. bss_size / 4], 0);
 
-
     // copy data to ram
     const data_source = @intFromPtr(&linker.__kernel_data_source);
 
@@ -72,7 +71,7 @@ fn kmain() !noreturn {
     var on_process: Process = .create(onProc, null, &on_stack);
     scheduler.enqueue(&on_process);
 
-    var off_stack: [128] u8 align(4) = undefined;
+    var off_stack: [128]u8 align(4) = undefined;
     var off_process: Process = .create(offProc, null, &off_stack);
     scheduler.enqueue(&off_process);
 
