@@ -32,6 +32,7 @@ pub const cc: std.builtin.CallingConvention = switch (cpu.arch) {
 const Context = extern struct {
     sp: usize,
     pc: usize,
+    fp: usize,
 };
 
 /// This data structure is used by the assembly code, do not change it
@@ -78,11 +79,11 @@ pub const Process = struct {
         const sp = @intFromPtr(stack.ptr) + stack.len;
         assert(sp & 0b11 == 0); // 4-byte aligned
 
-        // TODO: insert entrypoint and args information
         var self: Process = .{
             .context = .{
                 .sp = sp,
-                .pc = @intFromPtr(&trampoline),
+                .pc = @intFromPtr(&asmTrampoline),
+                .fp = undefined,
             },
             .stack = stack,
             .exit_code = null,
@@ -94,7 +95,7 @@ pub const Process = struct {
         self.push(0); // r10 (unused)
         self.push(0); // r9 (unused)
         self.push(0); // r8 (unused)
-        // self.push(0); // r7 is reserved as fp
+        // r7 (fp) is stored onto context
         self.push(0); // r6 (unused)
         self.push(0); // r5 (unused)
         self.push(0); // r4 (unused)
@@ -150,113 +151,13 @@ pub fn run() void {
     current_process = null; // cleanup
 }
 
-inline fn doSwitch(swap: *const Swap) void {
-    assert(Process.fromContext(swap.prev) == current_process);
-    current_process = Process.fromContext(swap.next);
+export var swap: *const Swap = undefined;
 
-    if (cpu.arch != .thumb) unreachable;
-
-    // backup registers into stack
-    asm volatile (
-        \\push {r0-r6}
-        \\
-        \\mov r0, r8
-        \\mov r1, r9
-        \\mov r2, r10
-        \\mov r3, r11
-        \\mov r4, r12
-        \\push {r0-r4}
-        ::: .{
-            .r0 = true,
-            .r1 = true,
-            .r2 = true,
-            .r3 = true,
-            .r4 = true,
-            .r13 = true, // sp
-            .memory = true,
-        });
-
-    // save special registers
-    asm volatile (
-        \\ldr r1, [r0, #0]
-        \\
-        \\mov r2, sp
-        \\str r2, [r1, #0]
-        \\
-        \\mov r2, lr
-        \\str r2, [r1, #4]
-        :
-        : [in] "{r0}" (swap),
-        : .{
-          .r1 = true,
-          .r2 = true,
-          .memory = true,
-        });
-
-    // restore special registers
-    asm volatile (
-        \\ldr r1, [r0, #4]
-        \\
-        \\ldr r2, [r1, #0]
-        \\mov sp, r2
-        \\
-        \\ldr r2, [r1, #4]
-        \\mov lr, r2
-        ::: .{
-            .r1 = true,
-            .r2 = true,
-            .r13 = true, // sp
-            .r14 = true, // lr
-        });
-
-    // restore registers from stack
-    asm volatile (
-        \\pop {r0-r4}
-        \\mov r8, r0
-        \\mov r9, r1
-        \\mov r10, r2
-        \\mov r11, r3
-        \\mov r12, r4
-        \\
-        \\pop {r0-r6}
-        ::: .{
-            .r0 = true,
-            .r1 = true,
-            .r2 = true,
-            .r3 = true,
-            .r4 = true,
-            .r5 = true,
-            .r6 = true,
-            // .r7 = true, // reserved as fp
-            .r8 = true,
-            .r9 = true,
-            .r10 = true,
-            .r11 = true,
-            .r12 = true,
-            .r13 = true, // sp
-        });
-
-    // jump back
-    asm volatile ("bx lr");
-}
-
-fn trampoline() callconv(cc) void {
-    switch (cpu.arch) {
-        else => unreachable,
-        .thumb => {
-            asm volatile (
-                \\
-                // Process.create pushes args and entrypoint such that they will pop into r0 and r1
-                // we can just call into entrypoint
-                \\blx r1
-                // when entrypoint returns, exitcode is on r0, which is already ready to be arg0 for exit
-                // we don't need to setup a link back before jumping, exit is noreturn
-                \\b exit
-                ::: .{
-                    .r0 = true,
-                });
-        },
-    }
+inline fn doSwitch(s: *const Swap) void {
+    assert(Process.fromContext(s.prev) == current_process);
+    current_process = Process.fromContext(s.next);
+    swap = s;
+    asmSwitch();
 }
 
 /// this function simply adds a node to the processes' queue
@@ -291,4 +192,79 @@ export fn exit(code: Process.ExitCode) callconv(cc) noreturn {
     });
 
     @panic("unreachable after switching back from ending processs");
+}
+
+extern fn asmSwitch() callconv(cc) void;
+extern fn asmTrampoline() callconv(cc) void;
+
+comptime {
+    switch (cpu.arch) {
+        else => unreachable,
+        .thumb => asm (
+            \\.thumb_func
+            \\.global asmTrampoline
+            \\.type asmTrampoline, %function
+            \\asmTrampoline:
+            // Process.create pushes values such that args and entrypoint will get pop'ed into r0 and r1 when switching
+            // as such, we can just call into entrypoint
+            \\  blx r1
+            // when entrypoint returns, exitcode is on r0, which is already ready to be arg0 for exit
+            // we don't need to setup lr to come back, exit is noreturn
+            \\  b exit
+            \\
+            // ---
+            \\
+            \\.thumb_func
+            \\.global asmSwitch
+            \\.type asmSwitch, %function
+            \\asmSwitch:
+            // backup registers into stack
+            \\  push {r0-r6}
+            \\
+            \\  mov r0, r8
+            \\  mov r1, r9
+            \\  mov r2, r10
+            \\  mov r3, r11
+            \\  mov r4, r12
+            \\  push {r0-r4}
+            // load swap var
+            \\  ldr r0, .swap
+            // save special registers
+            \\  ldr r1, [r0, #0]
+            \\
+            \\  mov r2, sp
+            \\  str r2, [r1, #0]
+            \\
+            \\  mov r2, lr
+            \\  str r2, [r1, #4]
+            \\
+            \\  mov r2, fp
+            \\  str r2, [r1, #8]
+            // restore special registers
+            \\  ldr r1, [r0, #4]
+            \\
+            \\  ldr r2, [r1, #0]
+            \\  mov sp, r2
+            \\
+            \\  ldr r2, [r1, #4]
+            \\  mov lr, r2
+            \\
+            \\  ldr r2, [r1, #8]
+            \\  mov fp, r2
+            // restore registers from stack
+            \\  pop {r0-r4}
+            \\  mov r8, r0
+            \\  mov r9, r1
+            \\  mov r10, r2
+            \\  mov r11, r3
+            \\  mov r12, r4
+            \\
+            \\  pop {r0-r6}
+            // jump back
+            \\  bx lr
+            // label to load global
+            \\.swap:
+            \\  .word swap
+        ),
+    }
 }
