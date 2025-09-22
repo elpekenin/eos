@@ -8,17 +8,19 @@ pub fn build(b: *std.Build) void {
         targets.Soc,
         "soc",
         "SoC to compile for",
-    ) orelse soc: {
-        const default: targets.Soc = .rp2040;
-        std.log.warn("selected default soc: {t}", .{default});
-        break :soc default;
-    };
+    ) orelse .rp2040;
 
     const optimize = b.option(
         std.builtin.OptimizeMode,
         "optimize",
         "optimize mode",
     ) orelse defaultOptimize(soc);
+
+    const use_lldb = b.option(
+        bool,
+        "lldb",
+        "use lldb instead of gdb",
+    ) orelse false;
 
     // compile kernel
     //
@@ -80,18 +82,22 @@ pub fn build(b: *std.Build) void {
     openocd.dependOn(&openocd_cmd.step);
 
     const debug = b.step("debug", "run debugger");
-    const debug_cmd = b.addSystemCommand(&.{
-        "lldb",
-        "--source",
-        b.fmt("lldb/{t}", .{soc}),
-        // FIXME: first 'arm-none-eabi-gdb' found in $PATH is QMK toolchains' one
-        //        it depends on newer glibc than available on my ubuntu WSL image
-        // "/usr/bin/arm-none-eabi-gdb",
-        // "--tui",
-        // "--quiet",
-        // "--command",
-        // b.fmt("gdb/{t}", .{soc}),
-    });
+    const debug_cmd = if (use_lldb)
+        b.addSystemCommand(&.{
+            "lldb",
+            "--source",
+            b.fmt("lldb/{t}", .{soc}),
+        })
+    else
+        b.addSystemCommand(&.{
+            // FIXME: first 'arm-none-eabi-gdb' found in $PATH is QMK toolchains' one
+            //        it depends on newer glibc than available on my ubuntu WSL image
+            "/usr/bin/arm-none-eabi-gdb",
+            "--tui",
+            "--quiet",
+            "--command",
+            b.fmt("gdb/{t}", .{soc}),
+        });
     debug_cmd.addFileArg(elf);
     debug.dependOn(&debug_cmd.step);
 }

@@ -22,12 +22,6 @@ comptime {
     }
 }
 
-/// this is equivalent to = .c, AFAICT
-pub const cc: std.builtin.CallingConvention = switch (cpu.arch) {
-    else => unreachable,
-    .thumb => .{ .arm_aapcs = .{} },
-};
-
 /// This data structure is used by the assembly code, do not change it
 const Context = extern struct {
     sp: usize,
@@ -68,7 +62,7 @@ fn getKernelProcess() *Process {
 pub const Process = struct {
     pub const Args = ?*anyopaque;
     pub const ExitCode = usize;
-    pub const Entrypoint = *const fn (Args) callconv(cc) ExitCode;
+    pub const Entrypoint = *const fn (Args) callconv(.c) ExitCode;
 
     context: Context,
     exit_code: ?ExitCode,
@@ -91,11 +85,11 @@ pub const Process = struct {
         };
 
         // r12 (ip) is used by linker
-        // r11 (lr)
+        // r11 (fp)
         self.push(0); // r10 (unused)
         self.push(0); // r9 (unused)
         self.push(0); // r8 (unused)
-        // r7 (fp) is stored onto context
+        self.push(0); // r7 (unused)
         self.push(0); // r6 (unused)
         self.push(0); // r5 (unused)
         self.push(0); // r4 (unused)
@@ -143,7 +137,7 @@ pub fn run() void {
     // without this, assert on doSwitch would fail
     current_process = getKernelProcess();
 
-    doSwitch(&.{
+    doSwitch(.{
         .prev = &getKernelProcess().context,
         .next = &next.context,
     });
@@ -151,9 +145,9 @@ pub fn run() void {
     current_process = null; // cleanup
 }
 
-export var swap: *const Swap = undefined;
+export var swap: Swap = undefined;
 
-fn doSwitch(s: *const Swap) void {
+fn doSwitch(s: Swap) void {
     assert(Process.fromContext(s.prev) == current_process);
     current_process = Process.fromContext(s.next);
     swap = s;
@@ -172,13 +166,13 @@ pub export fn yield() void {
     // just added `old` to queue, we will surely get a new value out (at least, pop'ing it back)
     const next = nextProcess() orelse unreachable;
 
-    doSwitch(&.{
+    doSwitch(.{
         .prev = &prev.context,
         .next = &next.context,
     });
 }
 
-export fn exit(code: Process.ExitCode) callconv(cc) noreturn {
+export fn exit(code: Process.ExitCode) callconv(.c) noreturn {
     const prev = current_process orelse @panic("kernel called exit()");
 
     queue.remove(&prev.node);
@@ -186,7 +180,7 @@ export fn exit(code: Process.ExitCode) callconv(cc) noreturn {
 
     const next = nextProcess() orelse getKernelProcess();
 
-    doSwitch(&.{
+    doSwitch(.{
         .prev = &prev.context,
         .next = &next.context,
     });
@@ -194,8 +188,8 @@ export fn exit(code: Process.ExitCode) callconv(cc) noreturn {
     @panic("unreachable after switching back from ending processs");
 }
 
-extern fn asmSwitch() callconv(cc) void;
-extern fn asmTrampoline() callconv(cc) void;
+extern fn asmSwitch() callconv(.c) void;
+extern fn asmTrampoline() callconv(.c) void;
 
 comptime {
     switch (cpu.arch) {
@@ -209,12 +203,8 @@ comptime {
             // as such, we can just call into entrypoint
             \\  blx r1
             // when entrypoint returns, exitcode is on r0, which is already ready to be arg0 for exit
-            // we don't need to setup lr to come back, exit is noreturn
-            \\  b .exit
+            \\  bl exit
             \\
-            // label to load global
-            \\.exit:
-            \\  .word exit
             // ---
             \\
             \\.thumb_func
@@ -222,7 +212,7 @@ comptime {
             \\.type asmSwitch, %function
             \\asmSwitch:
             // backup registers into stack
-            \\  push {r0-r6}
+            \\  push {r0-r7}
             \\
             \\  mov r0, r8
             \\  mov r1, r9
@@ -258,10 +248,11 @@ comptime {
             \\  mov r9, r1
             \\  mov r10, r2
             \\
-            \\  pop {r0-r6}
+            \\  pop {r0-r7}
             // jump back
             \\  bx lr
             // label to load global
+            \\.align 2
             \\.swap:
             \\  .word swap
         ),

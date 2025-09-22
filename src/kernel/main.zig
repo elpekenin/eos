@@ -147,9 +147,7 @@ fn delay(ticks: usize) void {
     }
 }
 
-const cc = scheduler.cc;
-
-fn onProc(_: Process.Args) callconv(cc) Process.ExitCode {
+export fn onProc(_: Process.Args) Process.ExitCode {
     rp2040.led.on();
     delay(500_000);
     scheduler.yield();
@@ -157,7 +155,7 @@ fn onProc(_: Process.Args) callconv(cc) Process.ExitCode {
     return 0;
 }
 
-fn offProc(_: Process.Args) callconv(cc) Process.ExitCode {
+export fn offProc(_: Process.Args) Process.ExitCode {
     rp2040.led.off();
     delay(500_000);
     scheduler.yield();
