@@ -1,0 +1,9 @@
+# default port on openocd
+target extended-remote localhost:3333
+
+set disassemble-next-line on
+show disassemble-next-line
+
+break asmSwitch
+
+monitor reset halt

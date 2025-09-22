@@ -83,15 +83,15 @@ pub const Process = struct {
             .context = .{
                 .sp = sp,
                 .pc = @intFromPtr(&asmTrampoline),
-                .fp = undefined,
+                .fp = ~@as(usize, 0),
             },
             .stack = stack,
             .exit_code = null,
             .node = .{},
         };
 
-        self.push(0); // r12 (unused)
-        self.push(0); // r11 (unused)
+        // r12 (ip) is used by linker
+        // r11 (lr)
         self.push(0); // r10 (unused)
         self.push(0); // r9 (unused)
         self.push(0); // r8 (unused)
@@ -153,7 +153,7 @@ pub fn run() void {
 
 export var swap: *const Swap = undefined;
 
-inline fn doSwitch(s: *const Swap) void {
+fn doSwitch(s: *const Swap) void {
     assert(Process.fromContext(s.prev) == current_process);
     current_process = Process.fromContext(s.next);
     swap = s;
@@ -210,8 +210,11 @@ comptime {
             \\  blx r1
             // when entrypoint returns, exitcode is on r0, which is already ready to be arg0 for exit
             // we don't need to setup lr to come back, exit is noreturn
-            \\  b exit
+            \\  b .exit
             \\
+            // label to load global
+            \\.exit:
+            \\  .word exit
             // ---
             \\
             \\.thumb_func
@@ -224,9 +227,7 @@ comptime {
             \\  mov r0, r8
             \\  mov r1, r9
             \\  mov r2, r10
-            \\  mov r3, r11
-            \\  mov r4, r12
-            \\  push {r0-r4}
+            \\  push {r0-r2}
             // load swap var
             \\  ldr r0, .swap
             // save special registers
@@ -252,12 +253,10 @@ comptime {
             \\  ldr r2, [r1, #8]
             \\  mov fp, r2
             // restore registers from stack
-            \\  pop {r0-r4}
+            \\  pop {r0-r2}
             \\  mov r8, r0
             \\  mov r9, r1
             \\  mov r10, r2
-            \\  mov r11, r3
-            \\  mov r12, r4
             \\
             \\  pop {r0-r6}
             // jump back

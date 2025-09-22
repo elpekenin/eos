@@ -7,7 +7,9 @@
     .dependencies = .{},
 
     .paths = .{
+        "gdb",
         "ld",
+        "lldb",
         "src",
         "tools",
         "build.zig",

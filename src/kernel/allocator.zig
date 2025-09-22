@@ -5,22 +5,23 @@ const List = std.DoublyLinkedList;
 
 const linker = @import("linker.zig");
 
-var heap: Heap = undefined;
+const Allocation = struct {
+    ptr: usize,
+    len: usize,
+
+    node: List.Node,
+
+    fn fromNode(node: *List.Node) *Allocation {
+        return @fieldParentPtr("node", node);
+    }
+};
 
 const Heap = struct {
-    const Allocation = struct {
-        ptr: [*]u8,
-        len: usize,
-
-        node: List.Node,
-
-        fn fromNode(node: *List.Node) *Allocation {
-            return @fieldParentPtr("node", node);
-        }
-    };
-
     /// memory managed by this heap structure
-    mem: []u8,
+    mem: struct {
+        start: usize,
+        end: usize,
+    },
 
     allocations: List,
 
@@ -31,6 +32,8 @@ const Heap = struct {
         };
     }
 };
+
+var heap: Heap = undefined;
 
 pub fn init() void {
     const start = linker.kernel_heap_start;

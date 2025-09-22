@@ -2,53 +2,34 @@ const std = @import("std");
 const targets = @import("src/targets.zig");
 
 pub fn build(b: *std.Build) void {
+    // build options
+    //
+    const soc = b.option(
+        targets.Soc,
+        "soc",
+        "SoC to compile for",
+    ) orelse soc: {
+        const default: targets.Soc = .rp2040;
+        std.log.warn("selected default soc: {t}", .{default});
+        break :soc default;
+    };
+
     const optimize = b.option(
         std.builtin.OptimizeMode,
         "optimize",
         "optimize mode",
-    ) orelse .ReleaseSafe;
+    ) orelse defaultOptimize(soc);
 
-    // set up a step to build each target
+    // compile kernel
     //
-    // they are also added as dependencies of install step
-    // this way, `zig build` builds everything
-    for (std.enums.values(targets.Soc)) |soc| {
-        const kernel = compileKernel(b, soc, optimize);
-        const install_kernel = if (soc == .rp2040) step: {
-            setupStage2(b, kernel);
-            const uf2 = toUf2(kernel, soc, .{});
-            break :step &b.addInstallFile(uf2, b.fmt("kernel_{t}.uf2", .{soc})).step;
-        } else &b.addInstallArtifact(kernel, .{}).step;
-
-        const soc_step = b.step(
-            @tagName(soc),
-            b.fmt("compile for {t}", .{soc}),
-        );
-        soc_step.dependOn(install_kernel);
-        b.getInstallStep().dependOn(soc_step); // no step provided -> implicit install -> build every soc
-    }
-
-    const fmt = b.step("fmt", "run code formatter");
-    const run_fmt = b.addFmt(.{
-        .paths = &.{
-            "build.zig",
-            "build.zig.zon",
-            "src/",
-        },
-    });
-    fmt.dependOn(&run_fmt.step);
-}
-
-/// compiles the kernel for the given target and optimization level
-fn compileKernel(b: *std.Build, soc: targets.Soc, optimize: std.builtin.OptimizeMode) *std.Build.Step.Compile {
     const info = targets.database.getAssertContains(soc);
-
     const kernel = b.addExecutable(.{
-        .name = b.fmt("kernel_{t}.elf", .{soc}),
+        .name = "kernel.elf",
         .root_module = b.createModule(.{
             .target = b.resolveTargetQuery(info.query()),
             .optimize = optimize,
-            .root_source_file = b.path("src/kernel/os.zig"),
+            .root_source_file = b.path("src/kernel/main.zig"),
+            .sanitize_c = .off,
         }),
     });
 
@@ -56,13 +37,90 @@ fn compileKernel(b: *std.Build, soc: targets.Soc, optimize: std.builtin.Optimize
     options.addOption(targets.Soc, "soc", soc);
     kernel.root_module.addImport("options", options.createModule());
 
-    const script = info.linker_script orelse b.fmt("ld/{s}.ld", .{@tagName(soc)});
+    const script = info.linker_script orelse b.fmt("ld/{t}", .{soc});
     kernel.setLinkerScript(b.path(script));
 
-    return kernel;
+    if (soc == .rp2040) {
+        // we want .uf2 to flash rp2040
+        setupStage2(b, kernel);
+        const uf2 = toUf2(kernel, soc, .{});
+        const copy_uf2 = b.addInstallFile(uf2, "kernel.uf2");
+        b.getInstallStep().dependOn(&copy_uf2.step);
+    }
+
+    b.installArtifact(kernel);
+    const elf = kernel.getEmittedBin();
+
+    // steps
+    //
+    const usbipd = b.step("usbipd", "attach debugprobe to WSL");
+    const usbipd_cmd = b.addSystemCommand(&.{
+        "usbipd.exe",
+        "attach",
+        "--wsl",
+        "--hardware-id",
+        "2e8a:000c",
+        "-a",
+    });
+    usbipd.dependOn(&usbipd_cmd.step);
+
+    const flash = b.step("flash", "flash the binary");
+    const flash_cmd = openocdCmd(b, soc);
+    flash_cmd.addArgs(&.{
+        "--command",
+        // NOTE: path relies on default dir given by `installArtifact` and build script naming `kernel.elf`
+        "program zig-out/bin/kernel.elf verify reset exit",
+    });
+    flash_cmd.addFileInput(elf);
+    flash.dependOn(b.getInstallStep());
+    flash.dependOn(&flash_cmd.step);
+
+    const openocd = b.step("openocd", "spawn openocd server");
+    const openocd_cmd = openocdCmd(b, soc);
+    openocd.dependOn(&openocd_cmd.step);
+
+    const debug = b.step("debug", "run debugger");
+    const debug_cmd = b.addSystemCommand(&.{
+        "lldb",
+        "--source",
+        b.fmt("lldb/{t}", .{soc}),
+        // FIXME: first 'arm-none-eabi-gdb' found in $PATH is QMK toolchains' one
+        //        it depends on newer glibc than available on my ubuntu WSL image
+        // "/usr/bin/arm-none-eabi-gdb",
+        // "--tui",
+        // "--quiet",
+        // "--command",
+        // b.fmt("gdb/{t}", .{soc}),
+    });
+    debug_cmd.addFileArg(elf);
+    debug.dependOn(&debug_cmd.step);
 }
 
-/// NOTE: this logic and the code being compiled where copied from MicroZig
+fn defaultOptimize(soc: targets.Soc) std.builtin.OptimizeMode {
+    return switch (soc) {
+        .rp2040 => .Debug,
+        .stm32h7s78 => .ReleaseSafe,
+    };
+}
+
+fn openocdCmd(b: *std.Build, soc: targets.Soc) *std.Build.Step.Run {
+    const argv = switch (soc) {
+        else => unreachable,
+        .rp2040 => &.{
+            "openocd",
+            "--file",
+            "interface/cmsis-dap.cfg",
+            "--file",
+            "target/rp2040.cfg",
+            "--command",
+            "adapter speed 5000",
+        },
+    };
+
+    return b.addSystemCommand(argv);
+}
+
+/// NOTE: this logic and the code being compiled were copied from MicroZig
 ///
 /// given a binary (*Compile), adds to it an import named "bootloader" which
 /// contains the binary for the compiled stage2 bootloader that sets up the

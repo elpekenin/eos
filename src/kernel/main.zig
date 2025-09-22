@@ -63,6 +63,8 @@ export fn _start() callconv(.c) noreturn {
 fn kmain() !noreturn {
     std.log.info("reached kmain", .{});
 
+    @breakpoint();
+
     // kmem.init();
 
     scheduler.init();
