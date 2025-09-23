@@ -84,10 +84,13 @@ pub const Process = struct {
             .node = .{},
         };
 
-        // r12 (ip) is used by linker
+        // r15 (pc)
+        // r14 (lr)
+        // r13 (sp)
+        // r12 (ip)
         // r11 (fp)
         self.push(0); // r10 (unused)
-        self.push(0); // r9 (unused)
+        // r9 (sb/tr)
         self.push(0); // r8 (unused)
         self.push(0); // r7 (unused)
         self.push(0); // r6 (unused)
@@ -207,20 +210,16 @@ comptime {
             \\asmSwitch:
             // backup registers into stack
             \\  push {r0-r7}
-            \\
             \\  mov r0, r8
-            \\  mov r1, r9
-            \\  mov r2, r10
-            \\  push {r0-r2}
+            \\  mov r1, r10
+            \\  push {r0-r1}
             // load prev context
             \\  ldr r0, .prev
             // save special registers
             \\  mov r1, sp
             \\  str r1, [r0, #0]
-            \\
             \\  mov r1, lr
             \\  str r1, [r0, #4]
-            \\
             \\  mov r1, fp
             \\  str r1, [r0, #8]
             // load next context
@@ -228,18 +227,14 @@ comptime {
             // restore special registers
             \\  ldr r1, [r0, #0]
             \\  mov sp, r1
-            \\
             \\  ldr r1, [r0, #4]
             \\  mov lr, r1
-            \\
             \\  ldr r1, [r0, #8]
             \\  mov fp, r1
             // restore registers from stack
-            \\  pop {r0-r2}
+            \\  pop {r0-r1}
             \\  mov r8, r0
-            \\  mov r9, r1
-            \\  mov r10, r2
-            \\
+            \\  mov r10, r1
             \\  pop {r0-r7}
             // jump back
             \\  bx lr

@@ -144,7 +144,7 @@ fn delay(ticks: usize) void {
 }
 
 pub const on = struct {
-    var stack: [128]u8 align(4) = @splat(0);
+    var stack: [256]u8 align(4) = @splat(0);
 
     fn run(_: Process.Args) callconv(.c) Process.ExitCode {
         rp2040.led.on();
@@ -156,7 +156,7 @@ pub const on = struct {
 };
 
 pub const off = struct {
-    var stack: [128]u8 align(4) = @splat(0);
+    var stack: [256]u8 align(4) = @splat(0);
 
     fn run(_: Process.Args) callconv(.c) Process.ExitCode {
         rp2040.led.off();
