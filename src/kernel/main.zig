@@ -147,9 +147,11 @@ pub const on = struct {
     var stack: [256]u8 align(4) = @splat(0);
 
     fn run(_: Process.Args) callconv(.c) Process.ExitCode {
-        rp2040.led.on();
-        delay(500_000);
-        scheduler.yield();
+        while (true) {
+            rp2040.led.on();
+            delay(500_000);
+            scheduler.yield();
+        }
 
         return 0;
     }
@@ -159,9 +161,11 @@ pub const off = struct {
     var stack: [256]u8 align(4) = @splat(0);
 
     fn run(_: Process.Args) callconv(.c) Process.ExitCode {
-        rp2040.led.off();
-        delay(500_000);
-        scheduler.yield();
+        while (true) {
+            rp2040.led.off();
+            delay(500_000);
+            scheduler.yield();
+        }
 
         return 0;
     }

@@ -94,17 +94,17 @@ pub const Process = struct {
         //  r9 sb/tr
         // --
 
-        self.push(0); // r7 (unused)
-        self.push(0); // r6 (unused)
-        self.push(0); // r5 (unused)
-        self.push(0); // r4 (unused)
-        self.push(0); // r3 (unused)
-        self.push(0); // r2 (unused)
+        self.push(0x77777777); // r7 (unused)
+        self.push(0x66666666); // r6 (unused)
+        self.push(0x55555555); // r5 (unused)
+        self.push(0x44444444); // r4 (unused)
+        self.push(0x33333333); // r3 (unused)
+        self.push(0x22222222); // r2 (unused)
         self.push(@intFromPtr(entrypoint)); // r1
         self.push(@intFromPtr(args)); // r0
         //
-        self.push(0); // r8 (unused)
-        self.push(0); // r10 (unused)
+        self.push(0x10101010); // r10 (unused)
+        self.push(0x88888888); // r8 (unused)
 
         return self;
     }
@@ -172,10 +172,16 @@ pub export fn yield() void {
     const prev = current_process orelse @panic("kernel called yield()");
     queue.append(&prev.node);
 
-    // just added `old` to queue, we will surely get a new value out (at least, pop'ing it back)
+    // just added `old` to queue, we will surely get a new value out (at the very least, pop'ing it back)
     const next = nextProcess() orelse unreachable;
 
     doSwitch(prev, next);
+}
+
+pub export fn sleep(ticks: usize) void {
+    for (0..ticks) |_| {
+        yield();
+    }
 }
 
 export fn exit(code: Process.ExitCode) callconv(.c) noreturn {
@@ -220,6 +226,7 @@ comptime {
             \\  push {r0-r1}
             // load prev context
             \\  ldr r0, .prev
+            \\  ldr r0, [r0]
             // save special registers
             \\  mov r1, sp
             \\  str r1, [r0, #0]
@@ -229,6 +236,7 @@ comptime {
             \\  str r1, [r0, #8]
             // load next context
             \\  ldr r0, .next
+            \\  ldr r0, [r0]
             // restore special registers
             \\  ldr r1, [r0, #0]
             \\  mov sp, r1
