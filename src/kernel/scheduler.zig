@@ -84,14 +84,16 @@ pub const Process = struct {
             .node = .{},
         };
 
-        // r15 (pc)
-        // r14 (lr)
-        // r13 (sp)
-        // r12 (ip)
-        // r11 (fp)
-        self.push(0); // r10 (unused)
-        // r9 (sb/tr)
-        self.push(0); // r8 (unused)
+        // ignored registers
+        // --
+        // r15 pc
+        // r14 lr
+        // r13 sp
+        // r12 ip
+        // r11 fp
+        //  r9 sb/tr
+        // --
+
         self.push(0); // r7 (unused)
         self.push(0); // r6 (unused)
         self.push(0); // r5 (unused)
@@ -100,6 +102,9 @@ pub const Process = struct {
         self.push(0); // r2 (unused)
         self.push(@intFromPtr(entrypoint)); // r1
         self.push(@intFromPtr(args)); // r0
+        //
+        self.push(0); // r8 (unused)
+        self.push(0); // r10 (unused)
 
         return self;
     }
