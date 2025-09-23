@@ -1,9 +1,0 @@
-command alias bh b set --hardware --name
-command alias reset process plugin monitor packet send reset init
-
-file --arch armv6m-none-none zig-out/bin/kernel.elf
-
-platform select remote-gdb-server
-platform connect connect://localhost:3333
-
-run

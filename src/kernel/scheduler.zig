@@ -137,20 +137,21 @@ pub fn run() void {
     // without this, assert on doSwitch would fail
     current_process = getKernelProcess();
 
-    doSwitch(.{
-        .prev = &getKernelProcess().context,
-        .next = &next.context,
-    });
+    doSwitch(getKernelProcess(), next);
 
     current_process = null; // cleanup
 }
 
-export var swap: Swap = undefined;
+export var prev_context: *Context = undefined;
+export var next_context: *Context = undefined;
 
-fn doSwitch(s: Swap) void {
-    assert(Process.fromContext(s.prev) == current_process);
-    current_process = Process.fromContext(s.next);
-    swap = s;
+fn doSwitch(prev: *Process, next: *Process) void {
+    assert(prev == current_process);
+    current_process = next;
+
+    prev_context = &prev.context;
+    next_context = &next.context;
+
     asmSwitch();
 }
 
@@ -166,10 +167,7 @@ pub export fn yield() void {
     // just added `old` to queue, we will surely get a new value out (at least, pop'ing it back)
     const next = nextProcess() orelse unreachable;
 
-    doSwitch(.{
-        .prev = &prev.context,
-        .next = &next.context,
-    });
+    doSwitch(prev, next);
 }
 
 export fn exit(code: Process.ExitCode) callconv(.c) noreturn {
@@ -180,11 +178,7 @@ export fn exit(code: Process.ExitCode) callconv(.c) noreturn {
 
     const next = nextProcess() orelse getKernelProcess();
 
-    doSwitch(.{
-        .prev = &prev.context,
-        .next = &next.context,
-    });
-
+    doSwitch(prev, next);
     @panic("unreachable after switching back from ending processs");
 }
 
@@ -218,30 +212,28 @@ comptime {
             \\  mov r1, r9
             \\  mov r2, r10
             \\  push {r0-r2}
-            // load swap var
-            \\  ldr r0, .swap
+            // load prev context
+            \\  ldr r0, .prev
             // save special registers
-            \\  ldr r1, [r0, #0]
+            \\  mov r1, sp
+            \\  str r1, [r0, #0]
             \\
-            \\  mov r2, sp
-            \\  str r2, [r1, #0]
+            \\  mov r1, lr
+            \\  str r1, [r0, #4]
             \\
-            \\  mov r2, lr
-            \\  str r2, [r1, #4]
-            \\
-            \\  mov r2, fp
-            \\  str r2, [r1, #8]
+            \\  mov r1, fp
+            \\  str r1, [r0, #8]
+            // load next context
+            \\  ldr r0, .next
             // restore special registers
+            \\  ldr r1, [r0, #0]
+            \\  mov sp, r1
+            \\
             \\  ldr r1, [r0, #4]
+            \\  mov lr, r1
             \\
-            \\  ldr r2, [r1, #0]
-            \\  mov sp, r2
-            \\
-            \\  ldr r2, [r1, #4]
-            \\  mov lr, r2
-            \\
-            \\  ldr r2, [r1, #8]
-            \\  mov fp, r2
+            \\  ldr r1, [r0, #8]
+            \\  mov fp, r1
             // restore registers from stack
             \\  pop {r0-r2}
             \\  mov r8, r0
@@ -251,10 +243,12 @@ comptime {
             \\  pop {r0-r7}
             // jump back
             \\  bx lr
-            // label to load global
+            // labels to load globals
             \\.align 2
-            \\.swap:
-            \\  .word swap
+            \\.prev:
+            \\  .word prev_context
+            \\.next:
+            \\  .word next_context
         ),
     }
 }

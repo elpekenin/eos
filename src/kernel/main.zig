@@ -63,18 +63,14 @@ export fn _start() callconv(.c) noreturn {
 fn kmain() !noreturn {
     std.log.info("reached kmain", .{});
 
-    @breakpoint();
-
     // kmem.init();
 
     scheduler.init();
 
-    var on_stack: [128]u8 align(4) = undefined;
-    var on_process: Process = .create(onProc, null, &on_stack);
+    var on_process: Process = .create(on.run, null, &on.stack);
     scheduler.enqueue(&on_process);
 
-    var off_stack: [128]u8 align(4) = undefined;
-    var off_process: Process = .create(offProc, null, &off_stack);
+    var off_process: Process = .create(off.run, null, &off.stack);
     scheduler.enqueue(&off_process);
 
     scheduler.run();
@@ -147,18 +143,26 @@ fn delay(ticks: usize) void {
     }
 }
 
-export fn onProc(_: Process.Args) Process.ExitCode {
-    rp2040.led.on();
-    delay(500_000);
-    scheduler.yield();
+pub const on = struct {
+    var stack: [128]u8 align(4) = @splat(0);
 
-    return 0;
-}
+    fn run(_: Process.Args) callconv(.c) Process.ExitCode {
+        rp2040.led.on();
+        delay(500_000);
+        scheduler.yield();
 
-export fn offProc(_: Process.Args) Process.ExitCode {
-    rp2040.led.off();
-    delay(500_000);
-    scheduler.yield();
+        return 0;
+    }
+};
 
-    return 0;
-}
+pub const off = struct {
+    var stack: [128]u8 align(4) = @splat(0);
+
+    fn run(_: Process.Args) callconv(.c) Process.ExitCode {
+        rp2040.led.off();
+        delay(500_000);
+        scheduler.yield();
+
+        return 0;
+    }
+};

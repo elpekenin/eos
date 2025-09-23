@@ -1,9 +1,11 @@
+# tui enable
+
 # default port on openocd
 target extended-remote localhost:3333
 
 set disassemble-next-line on
 show disassemble-next-line
 
-break asmSwitch
+b _start
 
 monitor reset halt
