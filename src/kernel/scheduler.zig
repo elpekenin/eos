@@ -29,12 +29,6 @@ const Context = extern struct {
     fp: usize,
 };
 
-/// This data structure is used by the assembly code, do not change it
-const Swap = extern struct {
-    prev: *Context,
-    next: *Context,
-};
-
 var current_process: ?*Process = null;
 
 var queue: Queue = .{};
@@ -71,7 +65,7 @@ pub const Process = struct {
 
     pub fn create(entrypoint: Entrypoint, args: Args, stack: []u8) Process {
         const sp = @intFromPtr(stack.ptr) + stack.len;
-        assert(sp & 0b11 == 0); // 4-byte aligned
+        assert(sp % 4 == 0); // 4-byte aligned
 
         var self: Process = .{
             .context = .{
@@ -103,7 +97,7 @@ pub const Process = struct {
         self.push(@intFromPtr(entrypoint)); // r1
         self.push(@intFromPtr(args)); // r0
         //
-        self.push(0x10101010); // r10 (unused)
+        self.push(0xAAAAAAAA); // r10 (unused)
         self.push(0x88888888); // r8 (unused)
 
         return self;
@@ -111,10 +105,6 @@ pub const Process = struct {
 
     fn fromNode(node: *Queue.Node) *Process {
         return @fieldParentPtr("node", node);
-    }
-
-    fn fromContext(context: *Context) *Process {
-        return @fieldParentPtr("context", context);
     }
 
     fn stackBase(self: *const Process) usize {
@@ -178,6 +168,7 @@ pub export fn yield() void {
     doSwitch(prev, next);
 }
 
+// FIXME: make this a proper sleep with a `Duration` type. For now, yield `ticks` times
 pub export fn sleep(ticks: usize) void {
     for (0..ticks) |_| {
         yield();

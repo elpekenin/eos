@@ -70,8 +70,8 @@ fn kmain() !noreturn {
     var on_process: Process = .create(on.run, null, &on.stack);
     scheduler.enqueue(&on_process);
 
-    var off_process: Process = .create(off.run, null, &off.stack);
-    scheduler.enqueue(&off_process);
+    // var off_process: Process = .create(off.run, null, &off.stack);
+    // scheduler.enqueue(&off_process);
 
     scheduler.run();
 
@@ -80,7 +80,7 @@ fn kmain() !noreturn {
     return error.SystemExit;
 }
 
-fn logFn(
+fn noopLogFn(
     comptime level: std.log.Level,
     comptime scope: @Type(.enum_literal),
     comptime format: []const u8,
@@ -93,7 +93,8 @@ fn logFn(
 }
 
 pub const std_options: std.Options = .{
-    .logFn = logFn,
+    .log_level = .debug,
+    .logFn = if (options.soc == .rp2040) rp2040.logFn else noopLogFn,
 };
 
 fn panicFn(message: []const u8, ret_addr: ?usize) noreturn {
@@ -137,20 +138,13 @@ export const vector_table: VectorTable linksection(".startup") = .{
     .reset = _start,
 };
 
-fn delay(ticks: usize) void {
-    for (0..ticks) |_| {
-        asm volatile ("nop" ::: .{ .memory = true });
-    }
-}
-
 pub const on = struct {
     var stack: [256]u8 align(4) = @splat(0);
 
     fn run(_: Process.Args) callconv(.c) Process.ExitCode {
         while (true) {
-            rp2040.led.on();
-            delay(500_000);
-            scheduler.yield();
+            rp2040.led.toggle();
+            scheduler.sleep(20_000);
         }
 
         return 0;
@@ -163,8 +157,7 @@ pub const off = struct {
     fn run(_: Process.Args) callconv(.c) Process.ExitCode {
         while (true) {
             rp2040.led.off();
-            delay(500_000);
-            scheduler.yield();
+            scheduler.sleep(20_000);
         }
 
         return 0;
