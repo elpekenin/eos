@@ -26,7 +26,6 @@ comptime {
 const Context = extern struct {
     sp: usize,
     pc: usize,
-    fp: usize,
 };
 
 var current_process: ?*Process = null;
@@ -71,21 +70,21 @@ pub const Process = struct {
             .context = .{
                 .sp = sp,
                 .pc = @intFromPtr(&asmTrampoline),
-                .fp = ~@as(usize, 0),
             },
             .stack = stack,
             .exit_code = null,
             .node = .{},
         };
 
-        // ignored registers
+        // special registers
         // --
         // r15 pc
         // r14 lr
         // r13 sp
         // r12 ip
-        // r11 fp
+        // r11 fp?
         //  r9 sb/tr
+        //  r7 fp?
         // --
 
         self.push(0x77777777); // r7 (unused)
@@ -97,7 +96,10 @@ pub const Process = struct {
         self.push(@intFromPtr(entrypoint)); // r1
         self.push(@intFromPtr(args)); // r0
         //
+        self.push(0xCCCCCCCC); // r12 (unused)
+        self.push(0xBBBBBBBB); // r11 (unused)
         self.push(0xAAAAAAAA); // r10 (unused)
+        self.push(0x99999999); // r9 (unused)
         self.push(0x88888888); // r8 (unused)
 
         return self;
@@ -213,8 +215,11 @@ comptime {
             // backup registers into stack
             \\  push {r0-r7}
             \\  mov r0, r8
-            \\  mov r1, r10
-            \\  push {r0-r1}
+            \\  mov r1, r9
+            \\  mov r2, r10
+            \\  mov r3, r11
+            \\  mov r4, r12
+            \\  push {r0-r4}
             // load prev context
             \\  ldr r0, .prev
             \\  ldr r0, [r0]
@@ -223,8 +228,6 @@ comptime {
             \\  str r1, [r0, #0]
             \\  mov r1, lr
             \\  str r1, [r0, #4]
-            \\  mov r1, fp
-            \\  str r1, [r0, #8]
             // load next context
             \\  ldr r0, .next
             \\  ldr r0, [r0]
@@ -233,12 +236,13 @@ comptime {
             \\  mov sp, r1
             \\  ldr r1, [r0, #4]
             \\  mov lr, r1
-            \\  ldr r1, [r0, #8]
-            \\  mov fp, r1
             // restore registers from stack
-            \\  pop {r0-r1}
+            \\  pop {r0-r4}
             \\  mov r8, r0
-            \\  mov r10, r1
+            \\  mov r9, r1
+            \\  mov r10, r2
+            \\  mov r11, r3
+            \\  mov r12, r4
             \\  pop {r0-r7}
             // jump back
             \\  bx lr

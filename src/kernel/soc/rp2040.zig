@@ -1,6 +1,7 @@
 //! Inspired on microzig
 
 const std = @import("std");
+const logger = std.log.scoped(.uart);
 
 // base addresses
 const GPIO_BASE = 0x40014000;
@@ -109,6 +110,11 @@ fn resetSubsys() void {
 }
 
 pub const uart = struct {
+    const putty = struct {
+        const clear_screen = "\x1B[2J";
+        const reset_cursor = "\x1B[H";
+    };
+
     fn init() void {
         // 9600 baud rate
         write(UART0_IBRD, 78);
@@ -138,52 +144,48 @@ pub const uart = struct {
         return bytes.len;
     }
 
-    fn writeBuffer(w: *std.Io.Writer) usize {
-        const buff = w.buffered();
-        w.end = 0;
-        return writeSlice(buff);
-    }
+    fn drain(_: *std.Io.Writer, data: []const []const u8, splat: usize) std.Io.Writer.Error!usize {
+        var n: usize = 0;
 
-    fn drain(w: *std.Io.Writer, data: []const []const u8, splat: usize) std.Io.Writer.Error!usize {
-        if (data.len == 0) return 0;
+        for (data, 0..) |bytes, i| {
+            n += writeSlice(bytes);
 
-        var written: usize = 0;
-
-        for (data[0 .. data.len - 1]) |bytes| {
-            const dest = w.buffered();
-            const len = @min(bytes.len, dest.len);
-            @memcpy(dest[0..len], bytes[0..len]);
-
-            if (bytes.len > dest.len) {
-                written += writeBuffer(w);
+            // splat element
+            if (i == data.len - 1) {
+                // already sent it once, thus splat-1
+                for (0..splat - 1) |_| {
+                    n += writeSlice(bytes);
+                }
             }
         }
 
-        const pattern = data[data.len - 1];
-        const dest = w.buffer[w.end..];
-        switch (pattern.len) {
-            0 => return 0,
-            1 => {
-                std.debug.assert(splat >= dest.len);
-                @memset(dest, pattern[0]);
-            },
-            else => {
-                written += writeBuffer(w);
-                for (0..splat) |_| {
-                    written += writeSlice(pattern);
-                }
-            },
-        }
-
-        return written;
+        return n;
     }
 
-    fn writer(buffer: []u8) std.Io.Writer {
+    fn streamingWriter() std.Io.Writer {
         return .{
-            .buffer = buffer,
+            .buffer = &.{},
             .vtable = &.{
                 .drain = drain,
             },
+        };
+    }
+
+    pub fn log(
+        comptime level: std.log.Level,
+        comptime scope: @Type(.enum_literal),
+        comptime format: []const u8,
+        args: anytype,
+    ) void {
+        const prefix = comptime level.asText() ++ switch (scope) {
+            .default => ": ",
+            else => " (" ++ @tagName(scope) ++ "): ",
+        };
+
+        var w = streamingWriter();
+        w.print(prefix ++ format ++ "\n", args) catch |e| {
+            _ = writeSlice(@errorName(e));
+            writeByte('\n');
         };
     }
 };
@@ -210,24 +212,14 @@ pub fn init() void {
     write(GPIO1_CTRL, UART0_RX_FUNCSEL); // GP1 as RX
     uart.init();
 
+    // assumes putty is connected
+    _ = uart.writeSlice(uart.putty.clear_screen);
+    _ = uart.writeSlice(uart.putty.reset_cursor);
+
+    logger.debug("configured 9600 baud rate", .{});
+
     write(GPIO25_CTRL, 5); // GP25 as SIO
     setBits(SIO_BASE + GPIO_OE_OFFSET, 1 << LED_PIN); // enable output
-}
-
-pub fn logFn(
-    comptime level: std.log.Level,
-    comptime scope: @Type(.enum_literal),
-    comptime format: []const u8,
-    args: anytype,
-) void {
-    const prefix = comptime level.asText() ++ switch (scope) {
-        .default => ": ",
-        else => " (" ++ @tagName(scope) ++ "): ",
-    };
-
-    var buffer: [100]u8 = undefined;
-    var writer = uart.writer(&buffer);
-    writer.print(prefix ++ format ++ "\r\n", args) catch {};
 }
 
 fn prepareBootSector(comptime stage2_rom: []const u8) [256]u8 {

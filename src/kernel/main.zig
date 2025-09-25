@@ -1,5 +1,6 @@
 const std = @import("std");
 const options = @import("options");
+const logger = std.log.scoped(.eos);
 
 const linker = @import("linker.zig");
 // const kmem = @import("kmem.zig"); // TODO
@@ -36,32 +37,30 @@ export fn _start() callconv(.c) noreturn {
     );
 
     kmain() catch |err| {
-        std.log.err("kmain() returned error: '{t}'", .{err});
+        logger.err("kmain() returned error: '{t}'", .{err});
 
         if (@errorReturnTrace()) |trace| {
             var index: usize = 0;
             var n_frames: usize = @min(trace.index, trace.instruction_addresses.len);
 
-            std.log.err("stack trace:", .{});
+            logger.err("stack trace:", .{});
             while (n_frames != 0) {
                 defer n_frames -= 1;
                 defer index = (index + 1) % trace.instruction_addresses.len;
 
                 const address = trace.instruction_addresses[index];
-                std.log.err("\t0x{x}", .{address});
+                logger.err("\t0x{x}", .{address});
             }
         } else {
-            std.log.err("could not unwind stack trace", .{});
+            logger.err("could not unwind stack trace", .{});
         }
 
         @panic("kmain() returned an error");
     };
-
-    @panic("somehow got out of kmain() with no error");
 }
 
 fn kmain() !noreturn {
-    std.log.info("reached kmain", .{});
+    logger.debug("reached kmain", .{});
 
     // kmem.init();
 
@@ -70,12 +69,12 @@ fn kmain() !noreturn {
     var on_process: Process = .create(on.run, null, &on.stack);
     scheduler.enqueue(&on_process);
 
-    // var off_process: Process = .create(off.run, null, &off.stack);
-    // scheduler.enqueue(&off_process);
+    var off_process: Process = .create(off.run, null, &off.stack);
+    scheduler.enqueue(&off_process);
 
     scheduler.run();
 
-    std.log.warn("all process finished, nothing else to do ...", .{});
+    logger.warn("all process finished, nothing else to do ...", .{});
 
     return error.SystemExit;
 }
@@ -94,12 +93,12 @@ fn noopLogFn(
 
 pub const std_options: std.Options = .{
     .log_level = .debug,
-    .logFn = if (options.soc == .rp2040) rp2040.logFn else noopLogFn,
+    .logFn = if (options.soc == .rp2040) rp2040.uart.log else noopLogFn,
 };
 
 fn panicFn(message: []const u8, ret_addr: ?usize) noreturn {
-    std.log.err("panic: {s} ({?X})", .{ message, ret_addr });
-    @panic(message);
+    logger.err("panic: {s} ({?X})", .{ message, ret_addr });
+    while (true) {}
 }
 
 pub const panic = std.debug.FullPanic(panicFn);
@@ -143,8 +142,9 @@ pub const on = struct {
 
     fn run(_: Process.Args) callconv(.c) Process.ExitCode {
         while (true) {
-            rp2040.led.toggle();
-            scheduler.sleep(20_000);
+            rp2040.led.on();
+            for (0..2_000_000) |_| asm volatile ("nop");
+            scheduler.yield();
         }
 
         return 0;
@@ -157,7 +157,8 @@ pub const off = struct {
     fn run(_: Process.Args) callconv(.c) Process.ExitCode {
         while (true) {
             rp2040.led.off();
-            scheduler.sleep(20_000);
+            for (0..2_000_000) |_| asm volatile ("nop");
+            scheduler.yield();
         }
 
         return 0;
