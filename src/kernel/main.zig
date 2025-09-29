@@ -37,7 +37,7 @@ export fn _start() callconv(.c) noreturn {
     );
 
     kmain() catch |err| {
-        logger.err("kmain() returned error: '{t}'", .{err});
+        logger.err("{t}", .{err});
 
         if (@errorReturnTrace()) |trace| {
             var index: usize = 0;
@@ -54,28 +54,32 @@ export fn _start() callconv(.c) noreturn {
         } else {
             logger.err("could not unwind stack trace", .{});
         }
-
-        @panic("kmain() returned an error");
     };
+
+    logger.err("dying...", .{});
+    while (true) {}
 }
 
 fn kmain() !noreturn {
-    logger.debug("reached kmain", .{});
+    logger.debug("started", .{});
 
     // kmem.init();
 
     scheduler.init();
 
-    var on_process: Process = .create(on.run, null, &on.stack);
+    var on_process: Process = .create(on.run, null, &on.stack, .{
+        .name = "led on",
+    });
     scheduler.enqueue(&on_process);
 
-    var off_process: Process = .create(off.run, null, &off.stack);
+    var off_process: Process = .create(off.run, null, &off.stack, .{
+        .name = "led off",
+    });
     scheduler.enqueue(&off_process);
 
     scheduler.run();
 
-    logger.warn("all process finished, nothing else to do ...", .{});
-
+    logger.warn("all process finished", .{});
     return error.SystemExit;
 }
 
@@ -97,7 +101,7 @@ pub const std_options: std.Options = .{
 };
 
 fn panicFn(message: []const u8, ret_addr: ?usize) noreturn {
-    logger.err("panic: {s} ({?X})", .{ message, ret_addr });
+    std.log.err("panic: {s} ({?X})", .{ message, ret_addr });
     while (true) {}
 }
 
@@ -105,10 +109,10 @@ pub const panic = std.debug.FullPanic(panicFn);
 
 const ISR = *const fn () callconv(.c) void;
 
-fn unhandedInterrupt(comptime msg: []const u8) ISR {
+fn unhandledInterrupt(comptime msg: []const u8) ISR {
     return struct {
         fn _() callconv(.c) void {
-            @panic(msg);
+            @panic("unhandled interrupt " ++ msg);
         }
     }._;
 }
@@ -116,29 +120,36 @@ fn unhandedInterrupt(comptime msg: []const u8) ISR {
 const VectorTable = extern struct {
     sp: *const anyopaque, // first "interrupt" is the initial stack pointer
     reset: ISR, // entrypoint of the device
-    nmi: ISR = unhandedInterrupt("nmi"),
-    hard_fault: ISR = unhandedInterrupt("hard_fault"),
-    mem_manage: ISR = unhandedInterrupt("mem_manage"),
-    bus_fault: ISR = unhandedInterrupt("bus_fault"),
-    usage_fault: ISR = unhandedInterrupt("usage_fault"),
-    reserved_exception_7: ISR = unhandedInterrupt("reserved exception 7"),
-    reserved_exception_8: ISR = unhandedInterrupt("reserved exception 8"),
-    reserved_exception_9: ISR = unhandedInterrupt("reserved exception 9"),
-    reserved_exception_10: ISR = unhandedInterrupt("reserved exception 10"),
-    svcall: ISR = unhandedInterrupt("svcall"),
-    debug_monitor: ISR = unhandedInterrupt("debug_monitor"),
-    reserved_exception_13: ISR = unhandedInterrupt("reserved exception 13"),
-    pendsv: ISR = unhandedInterrupt("pendsv"),
-    systick: ISR = unhandedInterrupt("systick"),
+    nmi: ISR = unhandledInterrupt("nmi"),
+    hard_fault: ISR = unhandledInterrupt("hard_fault"),
+    mem_manage: ISR = unhandledInterrupt("mem_manage"),
+    bus_fault: ISR = unhandledInterrupt("bus_fault"),
+    usage_fault: ISR = unhandledInterrupt("usage_fault"),
+    reserved_exception_7: ISR = unhandledInterrupt("reserved exception 7"),
+    reserved_exception_8: ISR = unhandledInterrupt("reserved exception 8"),
+    reserved_exception_9: ISR = unhandledInterrupt("reserved exception 9"),
+    reserved_exception_10: ISR = unhandledInterrupt("reserved exception 10"),
+    svcall: ISR = unhandledInterrupt("svcall"),
+    debug_monitor: ISR = unhandledInterrupt("debug_monitor"),
+    reserved_exception_13: ISR = unhandledInterrupt("reserved exception 13"),
+    pendsv: ISR = unhandledInterrupt("pendsv"),
+    systick: ISR = unhandledInterrupt("systick"),
 };
 
-export const vector_table: VectorTable linksection(".startup") = .{
+const vector_table: VectorTable = .{
     .sp = &linker.__kernel_stack_end,
     .reset = _start,
 };
 
+comptime {
+    @export(&vector_table, .{
+        .name = "vector_table",
+        .section = ".startup",
+    });
+}
+
 pub const on = struct {
-    var stack: [256]u8 align(4) = @splat(0);
+    var stack: [256]u8 align(8) = @splat(0);
 
     fn run(_: Process.Args) callconv(.c) Process.ExitCode {
         while (true) {
@@ -152,7 +163,7 @@ pub const on = struct {
 };
 
 pub const off = struct {
-    var stack: [256]u8 align(4) = @splat(0);
+    var stack: [256]u8 align(8) = @splat(0);
 
     fn run(_: Process.Args) callconv(.c) Process.ExitCode {
         while (true) {

@@ -33,6 +33,7 @@ const Heap = struct {
     }
 };
 
+// SAFETY: will be set prior to usage
 var heap: Heap = undefined;
 
 pub fn init() void {

@@ -212,7 +212,7 @@ pub fn init() void {
     write(GPIO1_CTRL, UART0_RX_FUNCSEL); // GP1 as RX
     uart.init();
 
-    // assumes putty is connected
+    // assumes putty is connected, reset its output
     _ = uart.writeSlice(uart.putty.clear_screen);
     _ = uart.writeSlice(uart.putty.reset_cursor);
 
@@ -223,8 +223,6 @@ pub fn init() void {
 }
 
 fn prepareBootSector(comptime stage2_rom: []const u8) [256]u8 {
-    @setEvalBranchQuota(10_000);
-
     var bootrom: [256]u8 = @splat(0xFF);
     @memcpy(bootrom[0..stage2_rom.len], stage2_rom);
 
