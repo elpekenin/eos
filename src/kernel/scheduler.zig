@@ -358,14 +358,14 @@ comptime {
             // load next context
             \\  ldr r0, .next
             \\  ldr r0, [r0]
-            // -- dummy for alignment
-            \\  pop {r0-r3}
             // restore special registers
             \\  ldr r1, [r0, #0]
             \\  mov sp, r1
             \\  ldr r1, [r0, #4]
             \\  mov lr, r1
             // restore registers from stack
+            // -- dummy for alignment
+            \\  pop {r0-r3}
             \\  pop {r0-r4}
             \\  mov r8, r0
             \\  mov r9, r1
