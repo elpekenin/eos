@@ -3,7 +3,7 @@ const options = @import("options");
 const logger = std.log.scoped(.eos);
 
 const linker = @import("linker.zig");
-// const kmem = @import("kmem.zig"); // TODO
+const kmem = @import("allocator.zig");
 const scheduler = @import("scheduler.zig");
 const Process = scheduler.Process;
 
@@ -63,19 +63,25 @@ export fn _start() callconv(.c) noreturn {
 fn kmain() !noreturn {
     logger.debug("started", .{});
 
-    // kmem.init();
-
+    kmem.init();
     scheduler.init();
 
-    var on_process: Process = .create(on.run, null, &on.stack, .{
-        .name = "led on",
-    });
-    scheduler.enqueue(&on_process);
+    if (true) {
+        var toggle_process: Process = try .spawn(toggle, null, .{
+            .name = "led toggle",
+        });
+        scheduler.enqueue(&toggle_process);
+    } else {
+        var on_process: Process = try .spawn(on, null, .{
+            .name = "led on",
+        });
+        scheduler.enqueue(&on_process);
 
-    var off_process: Process = .create(off.run, null, &off.stack, .{
-        .name = "led off",
-    });
-    scheduler.enqueue(&off_process);
+        var off_process: Process = try .spawn(off, null, .{
+            .name = "led off",
+        });
+        scheduler.enqueue(&off_process);
+    }
 
     scheduler.run();
 
@@ -148,30 +154,20 @@ comptime {
     });
 }
 
-pub const on = struct {
-    var stack: [256]u8 align(8) = @splat(0);
+fn procFunc(func: fn () void) fn (Process.Args) callconv(.c) Process.ExitCode {
+    return struct {
+        fn _(_: Process.Args) callconv(.c) Process.ExitCode {
+            while (true) {
+                func();
+                for (0..2_000_000) |_| asm volatile ("nop");
+                scheduler.yield();
+            }
 
-    fn run(_: Process.Args) callconv(.c) Process.ExitCode {
-        while (true) {
-            rp2040.led.on();
-            for (0..2_000_000) |_| asm volatile ("nop");
-            scheduler.yield();
+            return 0;
         }
+    }._;
+}
 
-        return 0;
-    }
-};
-
-pub const off = struct {
-    var stack: [256]u8 align(8) = @splat(0);
-
-    fn run(_: Process.Args) callconv(.c) Process.ExitCode {
-        while (true) {
-            rp2040.led.off();
-            for (0..2_000_000) |_| asm volatile ("nop");
-            scheduler.yield();
-        }
-
-        return 0;
-    }
-};
+const on = procFunc(rp2040.led.on);
+const off = procFunc(rp2040.led.off);
+const toggle = procFunc(rp2040.led.toggle);

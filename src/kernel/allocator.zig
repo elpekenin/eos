@@ -1,55 +1,20 @@
 //! Memory allocator
 
 const std = @import("std");
-const List = std.DoublyLinkedList;
 
 const linker = @import("linker.zig");
 
-const Allocation = struct {
-    ptr: usize,
-    len: usize,
-
-    node: List.Node,
-
-    fn fromNode(node: *List.Node) *Allocation {
-        return @fieldParentPtr("node", node);
-    }
-};
-
-const Heap = struct {
-    /// memory managed by this heap structure
-    mem: struct {
-        start: usize,
-        end: usize,
-    },
-
-    allocations: List,
-
-    fn from(mem: []u8) Heap {
-        return .{
-            .mem = mem,
-            .allocations = .{},
-        };
-    }
-};
-
 // SAFETY: will be set prior to usage
-var heap: Heap = undefined;
+var heap: std.heap.FixedBufferAllocator = undefined;
 
 pub fn init() void {
-    const start = linker.kernel_heap_start;
-    const end = linker.kernel_heap_end;
+    var buffer: []u8 = undefined;
+    buffer.ptr = @ptrCast(&linker.__kernel_heap_start);
+    buffer.len = @intFromPtr(&linker.__kernel_heap_end) - @intFromPtr(&linker.__kernel_heap_start);
 
-    heap = .from(start[0 .. end - start]);
+    heap = .init(buffer);
 }
 
-pub fn alloc(size: usize) ![*]u8 {
-    _ = size;
-    return error.OutOfMemory;
-}
-
-pub fn free(ptr: [*]u8, size: usize) void {
-    init.call();
-    _ = ptr;
-    _ = size;
+pub fn allocator() std.mem.Allocator {
+    return heap.allocator();
 }

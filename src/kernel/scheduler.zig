@@ -10,7 +10,8 @@ const logger = std.log.scoped(.scheduler);
 const Queue = std.DoublyLinkedList;
 const cpu = @import("builtin").target.cpu;
 
-// const kmem = @import("kmem.zig");
+const kmem = @import("allocator.zig");
+const CriticalSection = @import("CriticalSection.zig");
 
 comptime {
     const v6m: std.Target.arm.Feature = .v6m;
@@ -124,9 +125,7 @@ fn getKernelProcess() *Process {
     if (!S.init) {
         S.init = true;
 
-        kernel.process = .create(kernel.run, null, &kernel.stack, .{
-            .name = "kernel",
-        });
+        kernel.process = .create(kernel.run, null, &kernel.stack, "kernel");
     }
 
     return &kernel.process;
@@ -143,18 +142,14 @@ pub const Process = struct {
     node: Queue.Node,
     stack: []u8,
 
-    const Options = struct {
-        name: []const u8 = "anonymous",
-    };
-
-    pub fn create(entrypoint: Entrypoint, args: Args, stack: [] align(alignment) u8, comptime options: Options) Process {
+    pub fn create(entrypoint: Entrypoint, args: Args, stack: []align(alignment) u8, name: []const u8) Process {
         // not strictly needed (?), but a good habit at the very least
         assert(isAligned(stack.len));
 
         const sp = @intFromPtr(stack.ptr) + stack.len;
 
         var self: Process = .{
-            .name = options.name,
+            .name = name,
             .context = .{
                 .sp = sp,
                 .pc = @intFromPtr(&asmTrampoline),
@@ -175,6 +170,11 @@ pub const Process = struct {
         //  r7 fp?
         // --
 
+        // dummies to exit function with stack aligned
+        self.push(0xFFFFFFFF);
+        self.push(0xFFFFFFFF);
+        self.push(0xFFFFFFFF);
+
         // equivalent to first `push` in asm
         self.push(0x77777777); // r7 (unused)
         self.push(0x66666666); // r6 (unused)
@@ -184,19 +184,26 @@ pub const Process = struct {
         self.push(0x22222222); // r2 (unused)
         self.push(@intFromPtr(entrypoint)); // r1
         self.push(@intFromPtr(args)); // r0
+
         // second `push`
         self.push(0xCCCCCCCC); // r12 (unused)
         self.push(0xBBBBBBBB); // r11 (unused)
         self.push(0xAAAAAAAA); // r10 (unused)
         self.push(0x99999999); // r9 (unused)
         self.push(0x88888888); // r8 (unused)
-        // dummy
-        self.push(0xFFFFFFFF);
-        self.push(0xFFFFFFFF);
-        self.push(0xFFFFFFFF);
 
         assert(isAligned(self.context.sp));
         return self;
+    }
+
+    pub const SpawnOptions = struct {
+        stack_size: usize = 512,
+        name: ?[]const u8 = null,
+    };
+
+    pub fn spawn(entrypoint: Entrypoint, args: Args, comptime options: SpawnOptions) !Process {
+        const stack = try kmem.allocator().alignedAlloc(u8, .fromByteUnits(alignment), options.stack_size);
+        return .create(entrypoint, args, stack, options.name orelse "anonymous");
     }
 
     fn fromNode(node: *Queue.Node) *Process {
@@ -262,8 +269,19 @@ export var prev_context: *Context = undefined;
 export var next_context: *Context = undefined;
 
 fn doSwitch(prev: *Process, next: *Process) void {
+    const cs: CriticalSection = .enter();
+    defer cs.exit();
+
+    if (prev == next) {
+        logger.debug("prev == next, noop", .{});
+        return;
+    }
+
     assert(prev == current_process);
     current_process = next;
+
+    assert(isAligned(prev.context.sp));
+    assert(isAligned(next.context.sp));
 
     logger.debug("switching '{s}'({f}) -> '{s}'({f})", .{
         prev.name,
@@ -275,9 +293,10 @@ fn doSwitch(prev: *Process, next: *Process) void {
     prev_context = &prev.context;
     next_context = &next.context;
 
+    asmSwitch();
+
     assert(isAligned(prev.context.sp));
     assert(isAligned(next.context.sp));
-    asmSwitch();
 }
 
 /// this function simply adds a node to the processes' queue
@@ -293,13 +312,6 @@ pub export fn yield() void {
     const next = nextProcess() orelse unreachable;
 
     doSwitch(prev, next);
-}
-
-// FIXME: make this a proper sleep with a `Duration` type. For now, yield `ticks` times
-pub export fn sleep(ticks: usize) void {
-    for (0..ticks) |_| {
-        yield();
-    }
 }
 
 export fn exit(code: Process.ExitCode) callconv(.c) noreturn {
@@ -345,8 +357,6 @@ comptime {
             \\  mov r3, r11
             \\  mov r4, r12
             \\  push {r0-r4}
-            // -- dummy for alignment
-            \\  push {r0-r3}
             // load prev context
             \\  ldr r0, .prev
             \\  ldr r0, [r0]
@@ -364,8 +374,6 @@ comptime {
             \\  ldr r1, [r0, #4]
             \\  mov lr, r1
             // restore registers from stack
-            // -- dummy for alignment
-            \\  pop {r0-r3}
             \\  pop {r0-r4}
             \\  mov r8, r0
             \\  mov r9, r1
