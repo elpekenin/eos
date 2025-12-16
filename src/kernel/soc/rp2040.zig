@@ -53,25 +53,25 @@ const CLOCKS_CLK_PERI_CTRL = CLOCKS_BASE + 0x48;
 
 const LED_PIN = 25;
 
-fn write(addr: usize, value: u32) void {
+fn write(addr: u32, value: u32) void {
     @as(*volatile u32, @ptrFromInt(addr)).* = value;
 }
 
-fn read(addr: usize) u32 {
+fn read(addr: u32) u32 {
     return @as(*volatile u32, @ptrFromInt(addr)).*;
 }
 
-fn setBits(addr: usize, mask: u32) void {
+fn setBits(addr: u32, mask: u32) void {
     const val = read(addr);
     write(addr, val | mask);
 }
 
-fn clearBits(addr: usize, mask: u32) void {
+fn clearBits(addr: u32, mask: u32) void {
     const val = read(addr);
     write(addr, val & ~mask);
 }
 
-fn toggleBits(addr: usize, mask: u32) void {
+fn toggleBits(addr: u32, mask: u32) void {
     const start = read(addr);
     write(addr, start ^ mask);
 }

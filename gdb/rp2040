@@ -1,10 +1,10 @@
-# tui enable
+tui enable
 
 # default port on openocd
 target extended-remote localhost:3333
 
-set disassemble-next-line on
-show disassemble-next-line
+# set disassemble-next-line on
+# show disassemble-next-line
 
 b scheduler.yield
 

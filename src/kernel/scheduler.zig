@@ -11,54 +11,48 @@ const Queue = std.DoublyLinkedList;
 const cpu = @import("builtin").target.cpu;
 
 const kmem = @import("allocator.zig");
+const port = @import("portability.zig");
 const CriticalSection = @import("CriticalSection.zig");
+const Word = port.Word;
+const alignment = port.stack_alignment;
 
 comptime {
     const v6m: std.Target.arm.Feature = .v6m;
     const is_v6m = cpu.features.isEnabled(@intFromEnum(v6m));
 
     if (cpu.arch == .thumb and !is_v6m) {
-        const msg = "code only supports armv6m (CortexM0+) for now";
+        const msg = "scheduler only supports armv6m (CortexM0+) for now";
         @compileError(msg);
     }
 }
 
-const alignment = switch (cpu.arch) {
-    else => unreachable,
-    .thumb => 8,
-};
-
-comptime {
-    assert(std.math.isPowerOfTwo(alignment));
-}
-
-fn isAligned(val: usize) bool {
+fn isAligned(val: Word) bool {
     return val % alignment == 0;
 }
 
 /// This data structure is used by assembly, do not change it
 const Context = extern struct {
-    sp: usize,
-    pc: usize,
+    sp: Word,
+    pc: Word,
 };
 
 /// This data structure is used by assembly, do not change it
 const Registers = extern struct {
-    r0: u32,
-    r1: u32,
-    r2: u32,
-    r3: u32,
-    r4: u32,
-    r5: u32,
-    r6: u32,
-    r7: u32,
-    r8: u32,
-    r9: u32,
-    r10: u32,
-    r11: u32,
-    r12: u32,
-    sp: u32,
-    lr: u32,
+    r0: Word,
+    r1: Word,
+    r2: Word,
+    r3: Word,
+    r4: Word,
+    r5: Word,
+    r6: Word,
+    r7: Word,
+    r8: Word,
+    r9: Word,
+    r10: Word,
+    r11: Word,
+    r12: Word,
+    sp: Word,
+    lr: Word,
 
     fn read() Registers {
         // SAFETY: initialized later
@@ -133,7 +127,7 @@ fn getKernelProcess() *Process {
 
 pub const Process = struct {
     pub const Args = ?*anyopaque;
-    pub const ExitCode = usize;
+    pub const ExitCode = u32;
     pub const Entrypoint = *const fn (Args) callconv(.c) ExitCode;
 
     name: []const u8,
@@ -214,16 +208,16 @@ pub const Process = struct {
         return @intFromPtr(self.stack.ptr);
     }
 
-    fn push(self: *Process, value: usize) void {
-        self.context.sp -= @sizeOf(usize);
-        std.debug.assert(self.context.sp >= self.stackBase());
+    fn push(self: *Process, value: Word) void {
+        self.context.sp -= @sizeOf(Word);
+        assert(self.context.sp >= self.stackBase());
 
-        const ptr: *usize = @ptrFromInt(self.context.sp);
+        const ptr: *Word = @ptrFromInt(self.context.sp);
         ptr.* = value;
     }
 
     fn registers(self: *const Process) Registers {
-        const sp: [*]usize = @ptrFromInt(self.context.sp);
+        const sp: [*]Word = @ptrFromInt(self.context.sp);
         return .{
             .r8 = sp[0],
             .r9 = sp[1],
@@ -249,7 +243,7 @@ pub fn init() void {
 }
 
 pub fn run() void {
-    std.debug.assert(current_process == null);
+    assert(current_process == null);
 
     const next = nextProcess() orelse {
         logger.warn("no processes in queue, nothing to do", .{});
