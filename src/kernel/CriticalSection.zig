@@ -1,7 +1,5 @@
 const cpu = @import("builtin").target.cpu;
 
-const Word = @import("portability.zig").Word;
-
 const CriticalSection = @This();
 
 enabled: bool,
@@ -10,12 +8,13 @@ fn areInterruptsEnabled() bool {
     switch (cpu.arch) {
         else => unreachable,
         .thumb => {
-            var primask: Word = 0;
-            asm volatile ("mrs %[out], primask" : [out] "=r" (primask) :: .{
-                .memory = true,
-            });
+            var primask: usize = 0;
+            asm volatile ("mrs %[out], primask"
+                : [out] "=r" (primask),
+                :
+                : .{ .memory = true });
             return (primask & 1) == 0;
-        }
+        },
     }
 }
 

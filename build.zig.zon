@@ -2,7 +2,7 @@
     .name = .eos,
     .version = "0.0.0",
     .fingerprint = 0x9a3487378cf57645,
-    .minimum_zig_version = "0.15.1",
+    .minimum_zig_version = "0.16.0-dev.2296+fd3657bf8",
 
     .dependencies = .{},
 

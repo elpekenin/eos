@@ -128,8 +128,8 @@ fn setupStage2(b: *std.Build, kernel: *std.Build.Step.Compile) void {
 
     stage2.linkage = .static;
     stage2.build_id = .none;
-    stage2.setLinkerScript(b.path("src/bootrom/stage2.ld"));
-    stage2.addAssemblyFile(b.path("src/bootrom/w25q080.S"));
+    stage2.setLinkerScript(b.path("vendor/bootrom/stage2.ld"));
+    stage2.root_module.addAssemblyFile(b.path("vendor/bootrom/w25q080.S"));
     stage2.entry = .{ .symbol_name = "_stage2_boot" };
 
     const bin = b.addObjCopy(stage2.getEmittedBin(), .{
@@ -158,7 +158,7 @@ fn toUf2(kernel: *std.Build.Step.Compile, soc: targets.Soc, options: Uf2Options)
 
     const cmd = b.addSystemCommand(&.{
         "python3",
-        "tools/uf2/uf2conv.py",
+        "vendor/uf2/uf2conv.py",
         "--family",
         family,
     });

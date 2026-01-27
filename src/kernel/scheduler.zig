@@ -13,8 +13,6 @@ const cpu = @import("builtin").target.cpu;
 const kmem = @import("allocator.zig");
 const port = @import("portability.zig");
 const CriticalSection = @import("CriticalSection.zig");
-const Word = port.Word;
-const alignment = port.stack_alignment;
 
 comptime {
     const v6m: std.Target.arm.Feature = .v6m;
@@ -26,33 +24,33 @@ comptime {
     }
 }
 
-fn isAligned(val: Word) bool {
-    return val % alignment == 0;
+fn isAligned(val: usize) bool {
+    return val % port.stack_alignment == 0;
 }
 
 /// This data structure is used by assembly, do not change it
 const Context = extern struct {
-    sp: Word,
-    pc: Word,
+    sp: usize,
+    pc: usize,
 };
 
 /// This data structure is used by assembly, do not change it
 const Registers = extern struct {
-    r0: Word,
-    r1: Word,
-    r2: Word,
-    r3: Word,
-    r4: Word,
-    r5: Word,
-    r6: Word,
-    r7: Word,
-    r8: Word,
-    r9: Word,
-    r10: Word,
-    r11: Word,
-    r12: Word,
-    sp: Word,
-    lr: Word,
+    r0: usize,
+    r1: usize,
+    r2: usize,
+    r3: usize,
+    r4: usize,
+    r5: usize,
+    r6: usize,
+    r7: usize,
+    r8: usize,
+    r9: usize,
+    r10: usize,
+    r11: usize,
+    r12: usize,
+    sp: usize,
+    lr: usize,
 
     fn read() Registers {
         // SAFETY: initialized later
@@ -103,7 +101,7 @@ fn nextProcess() ?*Process {
 }
 
 const kernel = struct {
-    var stack: [128]u8 align(alignment) = @splat(0);
+    var stack: [128]u8 align(port.stack_alignment) = @splat(0);
     var process: Process = undefined;
 
     fn run(_: Process.Args) callconv(.c) Process.ExitCode {
@@ -196,7 +194,11 @@ pub const Process = struct {
     };
 
     pub fn spawn(entrypoint: Entrypoint, args: Args, comptime options: SpawnOptions) !Process {
-        const stack = try kmem.allocator().alignedAlloc(u8, .fromByteUnits(alignment), options.stack_size);
+        const stack = try kmem.allocator().alignedAlloc(
+            u8,
+            .fromByteUnits(port.stack_alignment),
+            options.stack_size,
+        );
         return .create(entrypoint, args, stack, options.name orelse "anonymous");
     }
 
@@ -208,16 +210,16 @@ pub const Process = struct {
         return @intFromPtr(self.stack.ptr);
     }
 
-    fn push(self: *Process, value: Word) void {
-        self.context.sp -= @sizeOf(Word);
+    fn push(self: *Process, value: usize) void {
+        self.context.sp -= @sizeOf(usize);
         assert(self.context.sp >= self.stackBase());
 
-        const ptr: *Word = @ptrFromInt(self.context.sp);
+        const ptr: *usize = @ptrFromInt(self.context.sp);
         ptr.* = value;
     }
 
     fn registers(self: *const Process) Registers {
-        const sp: [*]Word = @ptrFromInt(self.context.sp);
+        const sp: [*]usize = @ptrFromInt(self.context.sp);
         return .{
             .r8 = sp[0],
             .r9 = sp[1],
@@ -250,10 +252,11 @@ pub fn run() void {
         return;
     };
 
-    // without this, assert on doSwitch would fail
-    current_process = getKernelProcess();
-    doSwitch(current_process.?, next);
+    const kernel_process = getKernelProcess();
 
+    // without this, assert on doSwitch would fail
+    current_process = kernel_process;
+    doSwitch(kernel_process, next);
     current_process = null; // cleanup
 }
 
@@ -267,7 +270,7 @@ fn doSwitch(prev: *Process, next: *Process) void {
     defer cs.exit();
 
     if (prev == next) {
-        logger.debug("prev == next, noop", .{});
+        logger.debug("prev == next ({s}), noop", .{prev.name});
         return;
     }
 
