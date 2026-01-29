@@ -11,7 +11,6 @@ const Queue = std.DoublyLinkedList;
 const cpu = @import("builtin").target.cpu;
 
 const kmem = @import("allocator.zig");
-const port = @import("portability.zig");
 const CriticalSection = @import("CriticalSection.zig");
 
 comptime {
@@ -24,71 +23,19 @@ comptime {
     }
 }
 
-fn isAligned(val: usize) bool {
-    return val % port.stack_alignment == 0;
-}
-
-/// This data structure is used by assembly, do not change it
-const Context = extern struct {
-    sp: usize,
-    pc: usize,
+pub const stack_alignment = switch (cpu.arch) {
+    else => unreachable,
+    .thumb => 8,
 };
 
 /// This data structure is used by assembly, do not change it
-const Registers = extern struct {
-    r0: usize,
-    r1: usize,
-    r2: usize,
-    r3: usize,
-    r4: usize,
-    r5: usize,
-    r6: usize,
-    r7: usize,
-    r8: usize,
-    r9: usize,
-    r10: usize,
-    r11: usize,
-    r12: usize,
-    sp: usize,
-    lr: usize,
-
-    fn read() Registers {
-        // SAFETY: initialized later
-        var out: Registers = undefined;
-
-        asm volatile (
-            \\ str r0,  [r]
-            \\ str r1,  [r, #4]
-            \\ str r2,  [r, #8]
-            \\ str r3,  [r, #12]
-            \\ str r4,  [r, #16]
-            \\ str r5,  [r, #20]
-            \\ str r6,  [r, #24]
-            \\ str r7,  [r, #28]
-            \\ str r8,  [r, #32]
-            \\ str r9,  [r, #36]
-            \\ str r10, [r, #40]
-            \\ str r11, [r, #44]
-            \\ str r12, [r, #48]
-            \\ str sp,  [r, #52]
-            \\ str lr,  [r, #56]
-            :
-            : [r] "r" (&out),
-            : .{ .memory = true });
-
-        return out;
-    }
-
-    pub fn format(
-        self: Registers,
-        writer: *std.Io.Writer,
-    ) std.Io.Writer.Error!void {
-        try writer.print("{{", .{});
-        inline for (std.meta.fields(Registers)) |field| {
-            try writer.print(".{s}=0x{X},", .{ field.name, @field(self, field.name) });
-        }
-        try writer.print("}}", .{});
-    }
+const Context = switch (cpu.arch) {
+    else => unreachable,
+    .thumb => extern struct {
+        sp: usize, // r13
+        fp: usize, // r11
+        pc: usize, // r15
+    },
 };
 
 var current_process: ?*Process = null;
@@ -101,7 +48,7 @@ fn nextProcess() ?*Process {
 }
 
 const kernel = struct {
-    var stack: [128]u8 align(port.stack_alignment) = @splat(0);
+    var stack: [128]u8 align(stack_alignment) = @splat(0);
     var process: Process = undefined;
 
     fn run(_: Process.Args) callconv(.c) Process.ExitCode {
@@ -124,8 +71,8 @@ fn getKernelProcess() *Process {
 }
 
 pub const Process = struct {
-    pub const Args = ?*anyopaque;
-    pub const ExitCode = u32;
+    pub const Args = *anyopaque;
+    pub const ExitCode = usize;
     pub const Entrypoint = *const fn (Args) callconv(.c) ExitCode;
 
     name: []const u8,
@@ -134,58 +81,39 @@ pub const Process = struct {
     node: Queue.Node,
     stack: []u8,
 
-    pub fn create(entrypoint: Entrypoint, args: Args, stack: []align(alignment) u8, name: []const u8) Process {
-        // not strictly needed (?), but a good habit at the very least
-        assert(isAligned(stack.len));
+    pub fn create(entrypoint: Entrypoint, args: ?Args, stack: []align(stack_alignment) u8, name: []const u8) Process {
+        assert(stack.len % stack_alignment == 0);
 
-        const sp = @intFromPtr(stack.ptr) + stack.len;
+        var sp = @intFromPtr(stack.ptr) + stack.len;
+        assert(sp % stack_alignment == 0);
 
-        var self: Process = .{
+        const Data = extern struct {
+            func: Entrypoint,
+            args: ?Args,
+        };
+
+        // push args and entrypoint
+        sp = std.mem.alignBackward(usize, sp - @sizeOf(Data), @alignOf(Data));
+
+        const data: *Data = @ptrFromInt(sp);
+        data.* = .{
+            .func = entrypoint,
+            .args = args,
+        };
+
+        assert(sp % stack_alignment == 0);
+
+        return .{
             .name = name,
             .context = .{
                 .sp = sp,
-                .pc = @intFromPtr(&asmTrampoline),
+                .fp = 0,
+                .pc = @intFromPtr(&trampoline),
             },
             .stack = stack,
             .exit_code = null,
             .node = .{},
         };
-
-        // special registers
-        // --
-        // r15 pc
-        // r14 lr
-        // r13 sp
-        // r12 ip
-        // r11 fp?
-        //  r9 sb/tr
-        //  r7 fp?
-        // --
-
-        // dummies to exit function with stack aligned
-        self.push(0xFFFFFFFF);
-        self.push(0xFFFFFFFF);
-        self.push(0xFFFFFFFF);
-
-        // equivalent to first `push` in asm
-        self.push(0x77777777); // r7 (unused)
-        self.push(0x66666666); // r6 (unused)
-        self.push(0x55555555); // r5 (unused)
-        self.push(0x44444444); // r4 (unused)
-        self.push(0x33333333); // r3 (unused)
-        self.push(0x22222222); // r2 (unused)
-        self.push(@intFromPtr(entrypoint)); // r1
-        self.push(@intFromPtr(args)); // r0
-
-        // second `push`
-        self.push(0xCCCCCCCC); // r12 (unused)
-        self.push(0xBBBBBBBB); // r11 (unused)
-        self.push(0xAAAAAAAA); // r10 (unused)
-        self.push(0x99999999); // r9 (unused)
-        self.push(0x88888888); // r8 (unused)
-
-        assert(isAligned(self.context.sp));
-        return self;
     }
 
     pub const SpawnOptions = struct {
@@ -193,10 +121,10 @@ pub const Process = struct {
         name: ?[]const u8 = null,
     };
 
-    pub fn spawn(entrypoint: Entrypoint, args: Args, comptime options: SpawnOptions) !Process {
+    pub fn spawn(entrypoint: Entrypoint, args: ?Args, comptime options: SpawnOptions) !Process {
         const stack = try kmem.allocator().alignedAlloc(
             u8,
-            .fromByteUnits(port.stack_alignment),
+            .fromByteUnits(stack_alignment),
             options.stack_size,
         );
         return .create(entrypoint, args, stack, options.name orelse "anonymous");
@@ -205,44 +133,7 @@ pub const Process = struct {
     fn fromNode(node: *Queue.Node) *Process {
         return @fieldParentPtr("node", node);
     }
-
-    fn stackBase(self: *const Process) usize {
-        return @intFromPtr(self.stack.ptr);
-    }
-
-    fn push(self: *Process, value: usize) void {
-        self.context.sp -= @sizeOf(usize);
-        assert(self.context.sp >= self.stackBase());
-
-        const ptr: *usize = @ptrFromInt(self.context.sp);
-        ptr.* = value;
-    }
-
-    fn registers(self: *const Process) Registers {
-        const sp: [*]usize = @ptrFromInt(self.context.sp);
-        return .{
-            .r8 = sp[0],
-            .r9 = sp[1],
-            .r10 = sp[2],
-            .r11 = sp[3],
-            .r12 = sp[4],
-            .r0 = sp[5],
-            .r1 = sp[6],
-            .r2 = sp[7],
-            .r3 = sp[8],
-            .r4 = sp[9],
-            .r5 = sp[10],
-            .r6 = sp[11],
-            .r7 = sp[12],
-            .sp = self.context.sp,
-            .lr = self.context.pc,
-        };
-    }
 };
-
-pub fn init() void {
-    // no-op for now
-}
 
 pub fn run() void {
     assert(current_process == null);
@@ -260,12 +151,7 @@ pub fn run() void {
     current_process = null; // cleanup
 }
 
-// SAFETY: will be set prior to usage
-export var prev_context: *Context = undefined;
-// SAFETY: will be set prior to usage
-export var next_context: *Context = undefined;
-
-fn doSwitch(prev: *Process, next: *Process) void {
+inline fn doSwitch(noalias prev: *Process, noalias next: *Process) void {
     const cs: CriticalSection = .enter();
     defer cs.exit();
 
@@ -277,23 +163,99 @@ fn doSwitch(prev: *Process, next: *Process) void {
     assert(prev == current_process);
     current_process = next;
 
-    assert(isAligned(prev.context.sp));
-    assert(isAligned(next.context.sp));
-
-    logger.debug("switching '{s}'({f}) -> '{s}'({f})", .{
+    logger.debug("switching '{s}' -> '{s}'", .{
         prev.name,
-        prev.registers(),
         next.name,
-        next.registers(),
     });
 
-    prev_context = &prev.context;
-    next_context = &next.context;
+    switch (cpu.arch) {
+        else => unreachable,
+        .thumb => asm volatile (
+        // Calculate return address and set Thumb bit
+        // CRITICAL: adds r2, #1 sets LSB to indicate Thumb mode
+            \\ adr r2, 0f
+            \\ adds r2, #1
+            \\ mov r3, sp
+            \\ str r3, [r0, #0]
+            \\ str r7, [r0, #4]
+            \\ str r2, [r0, #8]
+            \\
+            \\ ldr r3, [r1, #0]
+            \\ mov sp, r3
+            \\ ldr r7, [r1, #4]
+            \\ ldr r2, [r1, #8]
+            \\ bx r2
+            \\
+            \\.balign 4
+            \\0:
+            :
+            : [_] "{r0}" (&prev.context),
+              [_] "{r1}" (&next.context),
+            : .{
+              .r0 = true,
+              .r1 = true,
+              .r2 = true,
+              .r3 = true,
+              .r4 = true,
+              .r5 = true,
+              .r6 = true,
+              .r7 = false, // frame pointer (saved)
+              .r8 = true,
+              .r9 = true,
+              .r10 = true,
+              .r11 = true,
+              .r12 = true,
+              .r13 = false, // stack pointer (saved)
+              .r14 = true, // link register (could be clobbered)
+              .d0 = true,
+              .d1 = true,
+              .d2 = true,
+              .d3 = true,
+              .d4 = true,
+              .d5 = true,
+              .d6 = true,
+              .d7 = true,
+              .d8 = true,
+              .d9 = true,
+              .d10 = true,
+              .d11 = true,
+              .d12 = true,
+              .d13 = true,
+              .d14 = true,
+              .d15 = true,
+              .d16 = true,
+              .d17 = true,
+              .d18 = true,
+              .d19 = true,
+              .d20 = true,
+              .d21 = true,
+              .d22 = true,
+              .d23 = true,
+              .d24 = true,
+              .d25 = true,
+              .d26 = true,
+              .d27 = true,
+              .d28 = true,
+              .d29 = true,
+              .d30 = true,
+              .d31 = true,
+            //   .fpscr = true,
+              .memory = true,
+            }),
+    }
+}
 
-    asmSwitch();
-
-    assert(isAligned(prev.context.sp));
-    assert(isAligned(next.context.sp));
+/// execute entrypoint(args), reading them from process' stack
+fn trampoline() callconv(.naked) noreturn {
+    switch (cpu.arch) {
+        else => unreachable,
+        .thumb => asm volatile (
+            \\ ldr r0, [sp, #4] // args
+            \\ ldr r2, [sp, #0] // entrypoint
+            \\ bx r2
+            // TODO: call exit
+        ),
+    }
 }
 
 /// this function simply adds a node to the processes' queue
@@ -321,71 +283,4 @@ export fn exit(code: Process.ExitCode) callconv(.c) noreturn {
 
     doSwitch(prev, next);
     @panic("unreachable after switching back from ending processs");
-}
-
-extern fn asmSwitch() callconv(.c) void;
-extern fn asmTrampoline() callconv(.c) void;
-
-comptime {
-    switch (cpu.arch) {
-        else => unreachable,
-        .thumb => asm (
-            \\.thumb_func
-            \\.global asmTrampoline
-            \\.type asmTrampoline, %function
-            \\asmTrampoline:
-            // Process.create pushes values such that args and entrypoint will get pop'ed into r0 and r1 when switching
-            // as such, we can just call into entrypoint
-            \\  blx r1
-            // when entrypoint returns, exitcode is on r0, which is already ready to be arg0 for exit
-            \\  bl exit
-            \\
-            // ---
-            \\
-            \\.thumb_func
-            \\.global asmSwitch
-            \\.type asmSwitch, %function
-            \\asmSwitch:
-            // backup registers into stack
-            \\  push {r0-r7}
-            \\  mov r0, r8
-            \\  mov r1, r9
-            \\  mov r2, r10
-            \\  mov r3, r11
-            \\  mov r4, r12
-            \\  push {r0-r4}
-            // load prev context
-            \\  ldr r0, .prev
-            \\  ldr r0, [r0]
-            // save special registers
-            \\  mov r1, sp
-            \\  str r1, [r0, #0]
-            \\  mov r1, lr
-            \\  str r1, [r0, #4]
-            // load next context
-            \\  ldr r0, .next
-            \\  ldr r0, [r0]
-            // restore special registers
-            \\  ldr r1, [r0, #0]
-            \\  mov sp, r1
-            \\  ldr r1, [r0, #4]
-            \\  mov lr, r1
-            // restore registers from stack
-            \\  pop {r0-r4}
-            \\  mov r8, r0
-            \\  mov r9, r1
-            \\  mov r10, r2
-            \\  mov r11, r3
-            \\  mov r12, r4
-            \\  pop {r0-r7}
-            // jump back
-            \\  bx lr
-            // labels to load globals
-            \\.align 2
-            \\.prev:
-            \\  .word prev_context
-            \\.next:
-            \\  .word next_context
-        ),
-    }
 }

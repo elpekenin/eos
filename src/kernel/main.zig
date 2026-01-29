@@ -64,7 +64,6 @@ fn kmain() !noreturn {
     logger.debug("started", .{});
 
     kmem.init();
-    scheduler.init();
 
     if (true) {
         var toggle_process: Process = try .spawn(toggle, null, .{
